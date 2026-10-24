@@ -15,6 +15,8 @@ const SESSION_KEY = 'mst.matrix.session.v1';
 const PREFS_KEY = 'mst.matrix.prefs.v1';
 const DRAFTS_KEY = 'mst.matrix.drafts.v1';
 const BOOKMARKS_KEY = 'mst.matrix.bookmarks.v1';
+const SSO_HS_KEY = 'mst.matrix.sso.homeserver';
+const SSO_REMEMBER_KEY = 'mst.matrix.sso.remember';
 
 const state = {
   client: null,
@@ -306,6 +308,20 @@ function setIcon(el, name) {
   el.innerHTML = icon(name);
 }
 
+function initDomainBanner() {
+  const banner = $('#domain-banner');
+  if (!banner) return;
+  const hide = () => {
+    clearTimeout(banner._hideTimer);
+    banner.classList.remove('show');
+    setTimeout(() => banner.classList.add('hidden'), 320);
+  };
+  banner.classList.remove('hidden');
+  requestAnimationFrame(() => banner.classList.add('show'));
+  banner._hideTimer = setTimeout(hide, 10000);
+  $('#domain-banner-close')?.addEventListener('click', hide);
+}
+
 function updateConnectionBanner() {
   const banner = $('#connection-banner');
   if (!banner) return;
@@ -515,6 +531,110 @@ async function retryE2EEInit() {
   refreshSecurityPanel();
 }
 
+async function completeAuthenticatedLogin(loginResponse, homeserver, fallbackUserId, remember = true) {
+  if (!loginResponse?.access_token || !loginResponse?.device_id) {
+    throw new Error('Homeserver не вернул access_token/device_id — вход невозможен.');
+  }
+  const userId = loginResponse.user_id || fallbackUserId;
+  const client = matrixcs.createClient({
+    baseUrl: homeserver,
+    userId,
+    accessToken: loginResponse.access_token,
+    deviceId: loginResponse.device_id,
+  });
+  state.userId = userId;
+  saveDeviceId(homeserver, userId, loginResponse.device_id);
+  attachClient(client);
+  await prepareCrypto(client);
+  const ready = waitForPrepared(client);
+  client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true, threadSupport: true });
+  await ready;
+  saveSession({
+    baseUrl: homeserver,
+    userId,
+    accessToken: client.getAccessToken(),
+    deviceId: client.getDeviceId(),
+  }, remember);
+  await finishLogin();
+  return client;
+}
+
+function setSsoLoading(loading) {
+  const btn = $('#sso-btn');
+  if (!btn) return;
+  btn.disabled = loading;
+  const label = $('.sso-label', btn);
+  if (label) label.textContent = loading ? 'Переходим на homeserver…' : 'Войти через SSO';
+}
+
+async function startSsoLogin() {
+  setAuthError('');
+  const homeserver = normalizeHomeserver($('#homeserver').value);
+  setSsoLoading(true);
+  try {
+    const bootstrap = matrixcs.createClient({ baseUrl: homeserver });
+    const flows = await bootstrap.loginFlows();
+    const sso = (flows.flows || []).find((flow) => String(flow.type || '').startsWith('m.login.sso'));
+    if (!sso) {
+      throw new Error('Этот homeserver не поддерживает вход через SSO.');
+    }
+    localStorage.setItem(SSO_HS_KEY, homeserver);
+    localStorage.setItem(SSO_REMEMBER_KEY, $('#remember')?.checked === false ? '0' : '1');
+    const redirectUrl = `${window.location.origin}${window.location.pathname}?sso_hs=${encodeURIComponent(homeserver)}`;
+    const ssoUrl = bootstrap.getSsoLoginUrl(redirectUrl, 'sso');
+    window.location.assign(ssoUrl);
+  } catch (err) {
+    console.warn('SSO start failed', err);
+    setAuthError(err?.message || 'Не удалось начать вход через SSO.');
+    setSsoLoading(false);
+  }
+}
+
+async function handleSsoCallback() {
+  const search = new URLSearchParams(window.location.search);
+  let loginToken = search.get('loginToken');
+  let hashParams = null;
+  if (window.location.hash) {
+    hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    if (!loginToken) loginToken = hashParams.get('loginToken');
+  }
+  const error = search.get('error') || hashParams?.get('error') || '';
+  if (!loginToken && !error) return false;
+
+  const cleanUrl = window.location.pathname + (window.location.hash === '#demo' ? '' : '');
+  window.history.replaceState({}, document.title, cleanUrl || '/');
+  if (error) {
+    setAuthError(search.get('error_description') || hashParams?.get('error_description') || `SSO: ${error}`);
+    return true;
+  }
+
+  const homeserver = normalizeHomeserver(search.get('sso_hs') || localStorage.getItem(SSO_HS_KEY) || $('#homeserver')?.value || 'https://matrix.org');
+  const remember = localStorage.getItem(SSO_REMEMBER_KEY) !== '0';
+  setLoginLoading(true);
+  try {
+    const bootstrap = matrixcs.createClient({ baseUrl: homeserver });
+    const loginResponse = await bootstrap.loginRequest({
+      type: 'm.login.token',
+      token: loginToken,
+      initial_device_display_name: 'mst.matrix web',
+    });
+    await completeAuthenticatedLogin(loginResponse, homeserver, loginResponse.user_id, remember);
+    toast('Добро пожаловать в mst.matrix', 'success');
+  } catch (err) {
+    console.error('SSO callback failed', err);
+    try { state.client?.stopClient(); } catch {}
+    state.client = null;
+    let msg = err?.message || 'Не удалось завершить вход через SSO.';
+    if (/fetch|network|Failed/i.test(msg)) msg = 'Не удалось подключиться к homeserver. Проверьте адрес и CORS.';
+    setAuthError(msg);
+  } finally {
+    localStorage.removeItem(SSO_HS_KEY);
+    localStorage.removeItem(SSO_REMEMBER_KEY);
+    setLoginLoading(false);
+  }
+  return true;
+}
+
 async function handleLogin(e) {
   e.preventDefault();
   setAuthError('');
@@ -539,33 +659,8 @@ async function handleLogin(e) {
       ...(existingDeviceId ? { device_id: existingDeviceId } : {}),
       initial_device_display_name: 'mst.matrix web',
     });
-    if (!loginResponse?.access_token || !loginResponse?.device_id) {
-      throw new Error('Homeserver не вернул access_token/device_id — вход невозможен.');
-    }
-
-    const client = matrixcs.createClient({
-      baseUrl: homeserver,
-      userId: loginResponse.user_id || userId,
-      accessToken: loginResponse.access_token,
-      deviceId: loginResponse.device_id,
-    });
-    state.userId = loginResponse.user_id || userId;
-    saveDeviceId(homeserver, state.userId, loginResponse.device_id);
-    attachClient(client);
-    await prepareCrypto(client);
-    const ready = waitForPrepared(client);
-    client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true, threadSupport: true });
-    await ready;
-
     const remember = $('#remember')?.checked !== false;
-    saveSession({
-      baseUrl: homeserver,
-      userId: state.userId,
-      accessToken: client.getAccessToken(),
-      deviceId: client.getDeviceId(),
-    }, remember);
-
-    await finishLogin();
+    await completeAuthenticatedLogin(loginResponse, homeserver, userId, remember);
     toast('Добро пожаловать в mst.matrix', 'success');
   } catch (err) {
     console.error(err);
@@ -619,6 +714,7 @@ async function restoreSession(session) {
 }
 
 async function finishLogin() {
+  document.body.classList.remove('auth-mode');
   $('#auth-view').classList.add('hidden');
   $('#app-view').classList.remove('hidden');
   await refreshProfile();
@@ -4882,6 +4978,7 @@ function buildDemoData() {
 }
 
 function enterDemo() {
+  document.body.classList.remove('auth-mode');
   buildDemoData();
   document.documentElement.dataset.demo = 'true';
   $('#auth-view').classList.add('hidden');
@@ -4909,6 +5006,7 @@ function exitDemo() {
     try { state.call.call.hangup('user_hangup', false); } catch {}
     closeCallUI();
   }
+  document.body.classList.add('auth-mode');
   state.demo = false;
   state.demoRooms = [];
   state.currentRoomId = null;
@@ -4954,6 +5052,7 @@ function clearReadReceiptTimers() {
 }
 
 function showAuth() {
+  document.body.classList.add('auth-mode');
   clearReadReceiptTimers();
   if (state.call.call) {
     try { state.call.call.hangup('user_hangup', false); } catch {}
@@ -4976,6 +5075,7 @@ function showAuth() {
    ════════════════════════════════════════════════════════════ */
 function bindEvents() {
   $('#login-form').addEventListener('submit', handleLogin);
+  $('#sso-btn').addEventListener('click', startSsoLogin);
 
   $('#toggle-password').addEventListener('click', () => {
     const input = $('#password');
@@ -5704,6 +5804,7 @@ function closeLightbox() {
    Init
    ════════════════════════════════════════════════════════════ */
 async function init() {
+  document.body.classList.add('auth-mode');
   hydrateIcons();
   loadPrefs();
   loadUserData();
@@ -5786,10 +5887,13 @@ async function init() {
 
   resizeComposer();
   updateSendButton();
+  initDomainBanner();
   updateConnectionBanner();
   window.addEventListener('online', updateConnectionBanner);
   window.addEventListener('offline', updateConnectionBanner);
   syncSidebarA11y();
+
+  if (await handleSsoCallback()) return;
 
   if (location.hash === '#demo') {
     enterDemo();

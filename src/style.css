@@ -1436,3 +1436,40 @@ body.voice-active .toast-stack { bottom: 150px; }
   .head-actions .icon-btn { width: 38px; height: 38px; }
   .sidebar-head { padding-left: 14px; padding-right: 10px; }
 }
+
+/* SSO */
+.auth-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 16px 0 12px; color: rgba(240, 237, 255, 0.4);
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.auth-divider::before, .auth-divider::after { content: ''; height: 1px; flex: 1; background: rgba(255,255,255,0.1); }
+.sso-btn { width: 100%; }
+.sso-btn .ico { width: 17px; height: 17px; }
+.auth-hint { margin: 8px 0 0; text-align: center; color: rgba(240, 237, 255, 0.42); font-size: 0.72rem; }
+
+/* Domain migration banner */
+.domain-banner {
+  position: fixed; left: 18px; bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 95; display: flex; align-items: flex-start; gap: 10px;
+  width: min(390px, calc(100vw - 36px)); padding: 12px 12px 12px 13px;
+  border-radius: 16px; border: 1px solid rgba(var(--accent-rgb), 0.22);
+  background: var(--surface-glass); backdrop-filter: blur(18px) saturate(140%);
+  box-shadow: var(--shadow-md);
+  transform: translateY(12px); opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.domain-banner.show { opacity: 1; transform: none; }
+.domain-banner.hidden { display: none; }
+.domain-banner-ico { display: inline-flex; color: var(--accent); flex: none; margin-top: 1px; }
+.domain-banner-ico .ico { width: 18px; height: 18px; }
+.domain-banner-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.domain-banner-text strong { font-size: 0.8rem; }
+.domain-banner-text span { font-size: 0.74rem; color: var(--text-2); line-height: 1.4; }
+.domain-banner-close { width: 26px; height: 26px; border-radius: 8px; flex: none; margin: -2px -2px 0 0; }
+.domain-banner-close .ico { width: 14px; height: 14px; }
+@media (max-width: 640px) {
+  .domain-banner { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); width: auto; }
+  body.voice-active .domain-banner { bottom: calc(150px + env(safe-area-inset-bottom)); }
+}
+body.auth-mode .domain-banner { top: calc(12px + env(safe-area-inset-top)); bottom: auto; }

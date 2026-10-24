@@ -9,8 +9,8 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237c5cff'/%3E%3Ccircle cx='20' cy='32' r='6' fill='white'/%3E%3Ccircle cx='32' cy='32' r='6' fill='white' opacity='.7'/%3E%3Ccircle cx='44' cy='32' r='6' fill='white' opacity='.4'/%3E%3C/svg%3E" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
-    <script type="module" crossorigin src="./assets/index-CU0MWsG6.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BOivxa3h.css">
+    <script type="module" crossorigin src="./assets/index-CB-nb1mw.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BVVoOWxv.css">
   </head>
   <body>
     <div id="app">
@@ -80,6 +80,13 @@
                 <span class="btn-label">Войти</span>
                 <span class="spinner hidden"></span>
               </button>
+
+              <div class="auth-divider"><span>или</span></div>
+              <button id="sso-btn" class="btn btn-ghost btn-lg btn-block sso-btn" type="button">
+                <span data-icon="external-link"></span>
+                <span class="sso-label">Войти через SSO</span>
+              </button>
+              <p class="auth-hint">Откроется страница вашего homeserver для входа</p>
             </form>
 
             <p class="auth-foot">Нет аккаунта? <a href="https://matrix.org/ecosystem/clients/" target="_blank" rel="noopener">Узнать о Matrix</a></p>
@@ -227,6 +234,15 @@
     </div>
 
     <div class="connection-banner hidden" id="connection-banner" role="status">Нет соединения — сообщения могут не отправляться</div>
+
+    <div class="domain-banner hidden" id="domain-banner" role="status">
+      <span class="domain-banner-ico" data-icon="sparkles"></span>
+      <div class="domain-banner-text">
+        <strong>Скоро переезжаем на новый домен</strong>
+        <span>Аккаунты, комнаты и сообщения в безопасности — ничего не потеряется. О дате переезда сообщим заранее — ничего делать не нужно.</span>
+      </div>
+      <button class="icon-btn domain-banner-close" id="domain-banner-close" data-icon="x" aria-label="Закрыть уведомление"></button>
+    </div>
 
     <!-- ══════════════════ CALL ══════════════════ -->
     <div class="call-backdrop hidden" id="call-backdrop" role="dialog" aria-modal="true" aria-labelledby="call-peer-name">

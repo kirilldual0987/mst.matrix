@@ -79,6 +79,13 @@
                 <span class="btn-label">Войти</span>
                 <span class="spinner hidden"></span>
               </button>
+
+              <div class="auth-divider"><span>или</span></div>
+              <button id="sso-btn" class="btn btn-ghost btn-lg btn-block sso-btn" type="button">
+                <span data-icon="external-link"></span>
+                <span class="sso-label">Войти через SSO</span>
+              </button>
+              <p class="auth-hint">Откроется страница вашего homeserver для входа</p>
             </form>
 
             <p class="auth-foot">Нет аккаунта? <a href="https://matrix.org/ecosystem/clients/" target="_blank" rel="noopener">Узнать о Matrix</a></p>
@@ -226,6 +233,15 @@
     </div>
 
     <div class="connection-banner hidden" id="connection-banner" role="status">Нет соединения — сообщения могут не отправляться</div>
+
+    <div class="domain-banner hidden" id="domain-banner" role="status">
+      <span class="domain-banner-ico" data-icon="sparkles"></span>
+      <div class="domain-banner-text">
+        <strong>Скоро переезжаем на новый домен</strong>
+        <span>Аккаунты, комнаты и сообщения в безопасности — ничего не потеряется. О дате переезда сообщим заранее — ничего делать не нужно.</span>
+      </div>
+      <button class="icon-btn domain-banner-close" id="domain-banner-close" data-icon="x" aria-label="Закрыть уведомление"></button>
+    </div>
 
     <!-- ══════════════════ CALL ══════════════════ -->
     <div class="call-backdrop hidden" id="call-backdrop" role="dialog" aria-modal="true" aria-labelledby="call-peer-name">
