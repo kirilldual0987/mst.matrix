@@ -27,6 +27,8 @@ const state = {
   bookmarks: [],
   focusMode: false,
   loadingOlder: false,
+  roomAvatarFile: null,
+  searchTab: 'messages',
   commandItems: [],
   commandIndex: 0,
   replyingTo: null,
@@ -281,8 +283,9 @@ async function downloadAttachment(content, name = 'file') {
 
 function avatarHtml(name, mxcOrUrl, cls = '') {
   const hue = hueFor(name || '?');
+  const raw = String(mxcOrUrl || '');
   const url = mxcOrUrl
-    ? (String(mxcOrUrl).startsWith('http') ? mxcOrUrl : mxcToUrl(mxcOrUrl, 96, 96, 'crop'))
+    ? (/^(https?:|blob:|data:)/.test(raw) ? raw : mxcToUrl(mxcOrUrl, 96, 96, 'crop'))
     : '';
   if (url) {
     const isMxc = String(mxcOrUrl || '').startsWith('mxc://');
@@ -752,13 +755,18 @@ function renderRooms() {
   const list = $('#room-list');
   if (!list) return;
 
+  renderInvites();
+
   let rooms;
   if (state.demo) {
     rooms = state.demoRooms;
   } else {
-    rooms = clientRooms().slice().sort((a, b) => {
-      return (b.getLastActiveTimestamp?.() || 0) - (a.getLastActiveTimestamp?.() || 0);
-    });
+    rooms = clientRooms()
+      .filter((room) => room.getMyMembership?.() !== 'invite')
+      .slice()
+      .sort((a, b) => {
+        return (b.getLastActiveTimestamp?.() || 0) - (a.getLastActiveTimestamp?.() || 0);
+      });
   }
 
   const filter = state.roomFilter.trim().toLowerCase();
@@ -1153,10 +1161,10 @@ function messageHtml(msg, grouped) {
     </div>`;
 
   return `<div class="msg ${own ? 'own' : ''} ${grouped ? 'grouped' : ''}" data-event-id="${escapeAttr(msg.id)}">
-    <div class="msg-avatar">${avatarHtml(msg.senderName || msg.sender)}</div>
+    <div class="msg-avatar" data-user-id="${escapeAttr(msg.sender)}" title="Профиль">${avatarHtml(msg.senderName || msg.sender)}</div>
     <div class="msg-main">
       <div class="msg-head">
-        <span class="msg-sender">${escapeHtml(name)}</span>
+        <span class="msg-sender" data-user-id="${escapeAttr(msg.sender)}" role="button" tabindex="0">${escapeHtml(name)}</span>
         ${msg.threadRoot ? '<span class="thread-tag">ветка</span>' : ''}
         <span class="msg-time">${formatTime(msg.ts)}${msg.edited ? ' · изм.' : ''}</span>
         ${readReceiptHtml(msg)}
@@ -2498,8 +2506,8 @@ async function createRoom() {
   }
 }
 
-async function startDM() {
-  let userId = $('#dm-user').value.trim();
+async function startDM(userIdInput) {
+  let userId = (userIdInput || $('#dm-user').value).trim();
   const error = $('#new-room-error');
   error.textContent = '';
   if (!userId) {
@@ -2568,6 +2576,391 @@ async function joinRoom() {
     console.error(e);
     error.textContent = e?.message || 'Не удалось войти в комнату.';
   }
+}
+
+/* ════════════════════════════════════════════════════════════
+   Invites, directory, global search, room settings, user profile
+   ════════════════════════════════════════════════════════════ */
+function invitedRooms() {
+  if (state.demo) return [];
+  return clientRooms().filter((room) => room.getMyMembership?.() === 'invite');
+}
+
+function renderInvites() {
+  const block = $('#invites-block');
+  const list = $('#invite-list');
+  if (!block || !list) return;
+  const invites = invitedRooms();
+  $('#invite-count').textContent = String(invites.length);
+  block.classList.toggle('hidden', invites.length === 0);
+  if (!invites.length) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = invites.map((room) => `
+    <div class="invite-item">
+      ${avatarHtml(roomName(room), roomAvatarMxc(room), '')}
+      <div class="invite-main">
+        <strong>${escapeHtml(roomName(room))}</strong>
+        <small>${escapeHtml((room.getTopic?.() || '').slice(0, 60))}</small>
+      </div>
+      <div class="invite-actions">
+        <button class="icon-btn accept" data-invite-accept="${escapeAttr(room.roomId)}" title="Принять">${icon('check')}</button>
+        <button class="icon-btn decline" data-invite-decline="${escapeAttr(room.roomId)}" title="Отклонить">${icon('x')}</button>
+      </div>
+    </div>`).join('');
+}
+
+async function acceptInvite(roomId) {
+  try {
+    await state.client.joinRoom(roomId);
+    toast('Вы присоединились к комнате', 'success');
+    selectRoom(roomId);
+  } catch (err) {
+    toast(err?.message || 'Не удалось принять приглашение', 'error');
+  }
+}
+
+async function declineInvite(roomId) {
+  try {
+    await state.client.leave(roomId);
+    renderRooms();
+    toast('Приглашение отклонено', 'info', 1800);
+  } catch (err) {
+    toast(err?.message || 'Не удалось отклонить приглашение', 'error');
+  }
+}
+
+/* Directory */
+function openDirectory() {
+  $('#directory-search').value = '';
+  $('#directory-results').innerHTML = '';
+  openModal('directory-modal');
+  searchDirectory('');
+}
+
+async function searchDirectory(term) {
+  const results = $('#directory-results');
+  if (!results) return;
+  if (state.demo) {
+    results.innerHTML = `
+      <div class="directory-note">В демо-режиме директория не подключена. Вот примеры:</div>
+      ${['Технологии и код', 'Книжный клуб', 'Игры по вечерам'].map((name) => `
+        <div class="directory-room">
+          ${avatarHtml(name)}
+          <div class="directory-main"><strong>${escapeHtml(name)}</strong><small>Публичная комната · демо</small></div>
+          <button class="btn btn-primary btn-sm" data-directory-join="demo-${escapeAttr(name)}">Войти</button>
+        </div>`).join('')}`;
+    return;
+  }
+  results.innerHTML = `<div class="bookmark-empty">${icon('loader')}<p style="margin-top:8px;">Поиск…</p></div>`;
+  try {
+    const res = await state.client.publicRooms({
+      limit: 40,
+      ...(term ? { filter: { generic_search_term: term } } : {}),
+    });
+    const chunk = res.chunk || [];
+    if (!chunk.length) {
+      results.innerHTML = '<div class="bookmark-empty">Ничего не найдено</div>';
+      return;
+    }
+    results.innerHTML = chunk.map((room) => `
+      <div class="directory-room">
+        ${avatarHtml(room.name || room.canonical_alias || room.room_id, room.avatar_url || null)}
+        <div class="directory-main">
+          <strong>${escapeHtml(room.name || room.canonical_alias || room.room_id)}</strong>
+          <small>${escapeHtml((room.topic || '').slice(0, 90))} · ${room.num_joined_members} участников</small>
+        </div>
+        <button class="btn btn-primary btn-sm" data-directory-join="${escapeAttr(room.room_id)}">${clientRooms().some((r) => r.roomId === room.room_id) ? 'Открыть' : 'Войти'}</button>
+      </div>`).join('');
+  } catch (err) {
+    results.innerHTML = `<div class="bookmark-empty">${escapeHtml(err?.message || 'Не удалось загрузить директорию')}</div>`;
+  }
+}
+
+async function joinDirectoryRoom(roomId) {
+  if (!roomId) return;
+  if (state.demo) {
+    const name = roomId.replace('demo-', '');
+    const room = {
+      id: `!${Date.now()}:matrix.org`,
+      name,
+      topic: 'Публичная комната (демо)',
+      unread: 0,
+      members: [{ name: state.profile.displayName || 'Вы', id: '@you:matrix.org', power: 0 }],
+      messages: [],
+    };
+    state.demoRooms.unshift(room);
+    closeModals();
+    renderRooms();
+    selectRoom(room.id);
+    return;
+  }
+  try {
+    await state.client.joinRoom(roomId);
+    closeModals();
+    renderRooms();
+    selectRoom(roomId);
+    toast('Вы присоединились к комнате', 'success');
+  } catch (err) {
+    toast(err?.message || 'Не удалось войти в комнату', 'error');
+  }
+}
+
+/* Global search */
+function openGlobalSearch() {
+  $('#search-query').value = '';
+  $('#search-results').innerHTML = '';
+  state.searchTab = 'messages';
+  $$('#search-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.stab === 'messages'));
+  openModal('search-modal');
+  setTimeout(() => $('#search-query')?.focus(), 60);
+}
+
+async function runGlobalSearch() {
+  const query = $('#search-query').value.trim();
+  const results = $('#search-results');
+  if (!query || !results) return;
+  const tab = state.searchTab;
+  results.innerHTML = `<div class="bookmark-empty">${icon('loader')}<p style="margin-top:8px;">Ищем…</p></div>`;
+
+  if (tab === 'people') {
+    if (!state.client || state.demo) {
+      results.innerHTML = '<div class="bookmark-empty">Поиск людей доступен после входа</div>';
+      return;
+    }
+    try {
+      const res = await state.client.searchUserDirectory({ term: query, limit: 20 });
+      const list = res.results || [];
+      if (!list.length) {
+        results.innerHTML = '<div class="bookmark-empty">Никого не нашли</div>';
+        return;
+      }
+      results.innerHTML = list.map((u) => `
+        <div class="search-row">
+          ${avatarHtml(u.display_name || u.user_id, u.avatar_url || null)}
+          <div class="search-main"><strong>${escapeHtml(u.display_name || u.user_id)}</strong><small>${escapeHtml(u.user_id)}</small></div>
+          <button class="btn btn-primary btn-sm" data-user-dm="${escapeAttr(u.user_id)}">Написать</button>
+        </div>`).join('');
+    } catch (err) {
+      results.innerHTML = `<div class="bookmark-empty">${escapeHtml(err?.message || 'Ошибка поиска')}</div>`;
+    }
+    return;
+  }
+
+  if (tab === 'rooms') {
+    if (state.demo) {
+      const matches = state.demoRooms.filter((r) => r.name.toLowerCase().includes(query.toLowerCase()));
+      results.innerHTML = matches.length
+        ? matches.map((room) => `
+          <div class="search-row">
+            ${avatarHtml(room.name)}
+            <div class="search-main"><strong>${escapeHtml(room.name)}</strong><small>${escapeHtml(room.topic)}</small></div>
+            <button class="btn btn-primary btn-sm" data-search-room="${escapeAttr(room.id)}">Открыть</button>
+          </div>`).join('')
+        : '<div class="bookmark-empty">Ничего не найдено</div>';
+      return;
+    }
+    const local = clientRooms().filter((r) => `${roomName(r)} ${r.roomId} ${r.getTopic?.() || ''}`.toLowerCase().includes(query.toLowerCase()));
+    let remote = [];
+    try {
+      const res = await state.client.publicRooms({ limit: 30, filter: { generic_search_term: query } });
+      remote = res.chunk || [];
+    } catch {}
+    const seen = new Set(local.map((r) => r.roomId));
+    const merged = [
+      ...local.map((r) => ({ id: r.roomId, name: roomName(r), topic: r.getTopic?.() || '', members: r.getJoinedMemberCount?.() || 0, joined: true, avatar: roomAvatarMxc(r) })),
+      ...remote.filter((r) => !seen.has(r.room_id)).map((r) => ({ id: r.room_id, name: r.name || r.canonical_alias || r.room_id, topic: r.topic || '', members: r.num_joined_members, joined: false, avatar: r.avatar_url || null })),
+    ];
+    if (!merged.length) {
+      results.innerHTML = '<div class="bookmark-empty">Ничего не найдено</div>';
+      return;
+    }
+    results.innerHTML = merged.map((room) => `
+      <div class="search-row">
+        ${avatarHtml(room.name, room.avatar)}
+        <div class="search-main"><strong>${escapeHtml(room.name)}</strong><small>${escapeHtml((room.topic || '').slice(0, 90))} · ${room.members} участников</small></div>
+        <button class="btn btn-primary btn-sm" data-search-room="${escapeAttr(room.id)}">${room.joined ? 'Открыть' : 'Войти'}</button>
+      </div>`).join('');
+    return;
+  }
+
+  // messages
+  if (!state.client || state.demo) {
+    results.innerHTML = '<div class="bookmark-empty">Поиск сообщений доступен после входа</div>';
+    return;
+  }
+  try {
+    const res = await state.client.searchRoomEvents({ term: query, filter: { limit: 20 } });
+    const rows = res.results || [];
+    if (!rows.length) {
+      results.innerHTML = '<div class="bookmark-empty">Ничего не найдено</div>';
+      return;
+    }
+    results.innerHTML = rows.map((r) => {
+      const ev = r.result || {};
+      const roomId = ev.room_id || '';
+      const room = state.client.getRoom(roomId);
+      const senderName = r.context?.profile_info?.[ev.sender]?.displayname || ev.sender || '';
+      const body = (ev.content?.body || '').replace(/\s+/g, ' ').slice(0, 160);
+      const joined = !!room;
+      return `
+        <div class="search-row">
+          ${avatarHtml(joined ? roomName(room) : senderName)}
+          <div class="search-main">
+            <strong>${escapeHtml(joined ? roomName(room) : roomId)}</strong>
+            <small>${escapeHtml(senderName)}${ev.origin_server_ts ? ' · ' + formatDateLabel(ev.origin_server_ts) : ''}</small>
+            <p>${escapeHtml(body)}</p>
+          </div>
+          <button class="btn btn-primary btn-sm" data-search-room="${escapeAttr(roomId)}">${joined ? 'Открыть' : 'Войти'}</button>
+        </div>`;
+    }).join('');
+  } catch (err) {
+    results.innerHTML = `<div class="bookmark-empty">${escapeHtml(err?.message || 'Ошибка поиска')}</div>`;
+  }
+}
+
+/* Room settings */
+function canEditRoom(room) {
+  if (state.demo) return true;
+  if (!room?.currentState) return false;
+  const userId = state.userId;
+  return (
+    room.currentState.maySendStateEvent?.('m.room.name', userId) ||
+    room.currentState.mayClientSendStateEvent?.('m.room.name', state.client)
+  );
+}
+
+function openRoomSettings() {
+  const room = getCurrentRoom();
+  if (!room) return;
+  if (!canEditRoom(room)) {
+    toast('Недостаточно прав для изменения настроек комнаты', 'error');
+    return;
+  }
+  state.roomAvatarFile = null;
+  $('#room-settings-error').textContent = '';
+  if (state.demo) {
+    $('#room-settings-name').value = room.name || '';
+    $('#room-settings-topic').value = room.topic || '';
+    $('#room-settings-alias').value = '';
+    $('#room-avatar-settings').innerHTML = `
+      ${avatarHtml(room.name, null, 'avatar-56')}
+      <label class="btn btn-ghost btn-sm"><span data-icon="camera"></span> Аватар<input type="file" id="room-avatar-input" accept="image/*" hidden /></label>`;
+    openModal('room-settings-modal');
+    $('#room-avatar-input').addEventListener('change', (e) => {
+      state.roomAvatarFile = e.target.files[0] || null;
+    });
+    return;
+  }
+  $('#room-settings-name').value = roomName(room);
+  $('#room-settings-topic').value = room.getTopic?.() || '';
+  $('#room-settings-alias').value = '';
+  $('#room-avatar-settings').innerHTML = `
+    ${avatarHtml(roomName(room), roomAvatarMxc(room), 'avatar-56')}
+    <label class="btn btn-ghost btn-sm"><span data-icon="camera"></span> Аватар<input type="file" id="room-avatar-input" accept="image/*" hidden /></label>`;
+  openModal('room-settings-modal');
+  $('#room-avatar-input').addEventListener('change', (e) => {
+    state.roomAvatarFile = e.target.files[0] || null;
+  });
+}
+
+async function saveRoomSettings() {
+  const room = getCurrentRoom();
+  if (!room) return;
+  const error = $('#room-settings-error');
+  error.textContent = '';
+  const name = $('#room-settings-name').value.trim();
+  const topic = $('#room-settings-topic').value.trim();
+  const alias = $('#room-settings-alias').value.trim();
+
+  if (state.demo) {
+    if (name) room.name = name;
+    room.topic = topic;
+    renderRoomHeader();
+    renderRooms();
+    closeModals();
+    toast('Настройки комнаты сохранены (демо)', 'success');
+    return;
+  }
+
+  try {
+    if (name && name !== roomName(room)) {
+      await state.client.sendStateEvent(room.roomId, 'm.room.name', { name }, '');
+    }
+    if (topic !== (room.getTopic?.() || '')) {
+      await state.client.sendStateEvent(room.roomId, 'm.room.topic', { topic }, '');
+    }
+    if (alias) {
+      let a = alias.trim();
+      if (!a.startsWith('#')) a = '#' + a;
+      await state.client.createAlias(a, room.roomId);
+    }
+    if (state.roomAvatarFile) {
+      const upload = await state.client.uploadContent(state.roomAvatarFile, { name: 'avatar', type: state.roomAvatarFile.type });
+      const mxc = upload?.content_uri || upload;
+      await state.client.sendStateEvent(room.roomId, 'm.room.avatar', { url: mxc }, '');
+    }
+    state.roomAvatarFile = null;
+    renderRoomHeader();
+    renderRooms();
+    closeModals();
+    toast('Настройки комнаты сохранены', 'success');
+  } catch (err) {
+    error.textContent = err?.message || 'Не удалось сохранить настройки';
+  }
+}
+
+/* User profile */
+async function openUserProfile(userId) {
+  if (!userId) return;
+  if (userId === state.userId || (state.demo && userId === '@you:matrix.org')) {
+    openProfileModal();
+    return;
+  }
+  const body = $('#user-body');
+  if (!body) return;
+  const room = getCurrentRoom();
+
+  let name = userId;
+  let avatarUrl = null;
+  let power = null;
+  if (state.demo) {
+    const member = room?.members?.find((m) => m.id === userId);
+    name = member?.name || userId;
+  } else if (state.client) {
+    try {
+      const profile = await state.client.getProfileInfo(userId);
+      name = profile?.displayname || userId;
+      avatarUrl = profile?.avatar_url || null;
+    } catch {}
+    const member = room?.getMember?.(userId);
+    power = member?.powerLevel ?? null;
+  }
+
+  body.innerHTML = `
+    <div class="profile-hero">
+      ${avatarHtml(name, avatarUrl, 'avatar-72')}
+      <strong>${escapeHtml(name)}</strong>
+      <small>${escapeHtml(userId)}</small>
+      ${power !== null ? `<small>Права в комнате: ${power}</small>` : ''}
+    </div>
+    <button class="btn btn-primary btn-block" id="user-dm-btn">${icon('message-plus')} Написать сообщение</button>
+    <button class="btn btn-ghost btn-block" id="user-copy-btn" style="margin-top:8px;">${icon('copy')} Скопировать Matrix ID</button>`;
+  openModal('user-modal');
+
+  $('#user-dm-btn').addEventListener('click', () => {
+    closeModals();
+    startDM(userId);
+  });
+  $('#user-copy-btn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(userId);
+      toast('Matrix ID скопирован', 'success', 1800);
+    } catch {
+      toast('Не удалось скопировать', 'error');
+    }
+  });
 }
 
 async function leaveRoom(roomId) {
@@ -2664,10 +3057,11 @@ function openRoomInfo() {
         <div class="info-row">${icon('users')}<span>${room.members.length} участников</span></div>
       </div>
       <div class="member-list">${room.members.map((m) => `
-        <div class="member-row">${avatarHtml(m.name)}<span>${escapeHtml(m.name)}</span><small>${m.power >= 100 ? 'Админ' : ''}</small></div>`).join('')}</div>
+        <div class="member-row" data-member="${escapeAttr(m.id)}" role="button" tabindex="0">${avatarHtml(m.name)}<span>${escapeHtml(m.name)}</span><small>${m.power >= 100 ? 'Админ' : ''}</small></div>`).join('')}</div>
       <div class="settings-label">Пригласить пользователя</div>
       <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
-      <button class="btn btn-danger-soft btn-block" style="margin-top:16px;" data-leave-room="${escapeAttr(room.id)}">${icon('logout')} Покинуть комнату</button>`;
+      ${canEditRoom(room) ? `<button class="btn btn-soft btn-block" style="margin-top:16px;" id="open-room-settings">${icon('settings')} Настройки комнаты</button>` : ''}
+      <button class="btn btn-danger-soft btn-block" style="margin-top:8px;" data-leave-room="${escapeAttr(room.id)}">${icon('logout')} Покинуть комнату</button>`;
   } else {
     const name = roomName(room);
     const alias = room.getCanonicalAlias?.() || '';
@@ -2689,12 +3083,13 @@ function openRoomInfo() {
       <div class="settings-label">Участники</div>
       <div class="member-list">
         ${members.slice(0, 80).map((m) => `
-          <div class="member-row">${avatarHtml(m.name, m.getAvatarUrl?.(state.client.getHomeserverUrl(), 64, 64, 'crop'))}
+          <div class="member-row" data-member="${escapeAttr(m.userId)}" role="button" tabindex="0">${avatarHtml(m.name, m.getAvatarUrl?.(state.client.getHomeserverUrl(), 64, 64, 'crop'))}
           <span>${escapeHtml(m.name)}${m.userId === state.userId ? ' (вы)' : ''}</span><small>${m.powerLevel >= 100 ? 'Админ' : ''}</small></div>`).join('')}
       </div>
       <div class="settings-label">Пригласить пользователя</div>
       <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
-      ${canLeave ? `<button class="btn btn-danger-soft btn-block" style="margin-top:16px;" data-leave-room="${escapeAttr(room.roomId)}">${icon('logout')} Покинуть комнату</button>` : ''}`;
+      ${canEditRoom(room) ? `<button class="btn btn-soft btn-block" style="margin-top:16px;" id="open-room-settings">${icon('settings')} Настройки комнаты</button>` : ''}
+      ${canLeave ? `<button class="btn btn-danger-soft btn-block" style="margin-top:8px;" data-leave-room="${escapeAttr(room.roomId)}">${icon('logout')} Покинуть комнату</button>` : ''}`;
   }
   openModal('room-info-modal');
 }
@@ -2761,6 +3156,27 @@ function allCommands() {
       subtitle: 'Создать комнату или войти по адресу',
       keywords: 'создать новую комнату join',
       run: openNewRoom,
+    },
+    {
+      icon: 'compass',
+      title: 'Директория комнат',
+      subtitle: 'Публичные комнаты homeserver’а',
+      keywords: 'директория комнаты public explore',
+      run: openDirectory,
+    },
+    {
+      icon: 'search',
+      title: 'Глобальный поиск',
+      subtitle: 'Сообщения, комнаты и люди',
+      keywords: 'поиск search найти',
+      run: openGlobalSearch,
+    },
+    {
+      icon: 'settings',
+      title: 'Настройки комнаты',
+      subtitle: 'Имя, тема, аватар, алиасы',
+      keywords: 'настройки комнаты room settings',
+      run: openRoomSettings,
     },
     {
       icon: 'bookmark',
@@ -3152,6 +3568,12 @@ function bindEvents() {
       e.preventDefault();
       openCommandPalette();
     }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      if (!$('#app-view')?.classList.contains('hidden')) {
+        e.preventDefault();
+        openGlobalSearch();
+      }
+    }
     if (e.key === 'Escape') {
       const overlayOpen =
         !$('#modal-backdrop')?.classList.contains('hidden') ||
@@ -3367,10 +3789,16 @@ function bindEvents() {
   $('#messages').addEventListener('click', async (e) => {
     if (window.matchMedia('(hover: none)').matches) {
       const msg = e.target.closest('.msg');
-      if (msg && !e.target.closest('.msg-tools') && !e.target.closest('[data-action]') && !e.target.closest('[data-audio-download]') && !e.target.closest('[data-file-event]') && !e.target.closest('.audio-play') && !e.target.closest('.audio-speed') && !e.target.closest('.audio-wave')) {
+      if (msg && !e.target.closest('.msg-tools') && !e.target.closest('[data-action]') && !e.target.closest('[data-user-id]') && !e.target.closest('[data-audio-download]') && !e.target.closest('[data-file-event]') && !e.target.closest('.audio-play') && !e.target.closest('.audio-speed') && !e.target.closest('.audio-wave')) {
         $$('.msg.tools-open').forEach((m) => { if (m !== msg) m.classList.remove('tools-open'); });
         msg.classList.toggle('tools-open');
       }
+    }
+
+    const userEl = e.target.closest('[data-user-id]');
+    if (userEl && !e.target.closest('.msg-tools')) {
+      openUserProfile(userEl.dataset.userId);
+      return;
     }
 
     const fileBtn = e.target.closest('[data-file-event]');
@@ -3474,6 +3902,94 @@ function bindEvents() {
     selectRoom(room.dataset.recapRoom);
   });
 
+  // Invites
+  $('#invite-list').addEventListener('click', (e) => {
+    const accept = e.target.closest('[data-invite-accept]');
+    if (accept) {
+      acceptInvite(accept.dataset.inviteAccept);
+      return;
+    }
+    const decline = e.target.closest('[data-invite-decline]');
+    if (decline) declineInvite(decline.dataset.inviteDecline);
+  });
+
+  // Directory
+  $('#open-directory-from-join').addEventListener('click', () => {
+    closeModals();
+    openDirectory();
+  });
+  $('#directory-search-btn').addEventListener('click', () => searchDirectory($('#directory-search').value.trim()));
+  $('#directory-search').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') searchDirectory(e.target.value.trim());
+  });
+  $('#directory-results').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-directory-join]');
+    if (btn) joinDirectoryRoom(btn.dataset.directoryJoin);
+  });
+
+  // Global search
+  $('#search-run').addEventListener('click', runGlobalSearch);
+  $('#search-query').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') runGlobalSearch();
+  });
+  $('#search-tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-stab]');
+    if (!btn) return;
+    state.searchTab = btn.dataset.stab;
+    $$('#search-tabs button').forEach((b) => b.classList.toggle('active', b === btn));
+    if ($('#search-query').value.trim()) runGlobalSearch();
+  });
+  $('#search-results').addEventListener('click', async (e) => {
+    const dm = e.target.closest('[data-user-dm]');
+    if (dm) {
+      closeModals();
+      startDM(dm.dataset.userDm);
+      return;
+    }
+    const roomBtn = e.target.closest('[data-search-room]');
+    if (!roomBtn) return;
+    const roomId = roomBtn.dataset.searchRoom;
+    const existing = state.demo ? state.demoRooms.find((r) => r.id === roomId) : state.client?.getRoom(roomId);
+    if (existing) {
+      closeModals();
+      selectRoom(roomId);
+    } else {
+      closeModals();
+      await joinDirectoryRoom(roomId);
+    }
+  });
+
+  // Room settings
+  $('#room-settings-save').addEventListener('click', saveRoomSettings);
+
+  // Own avatar upload in settings
+  $('#avatar-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    if (state.demo) {
+      const url = URL.createObjectURL(file);
+      state.profile.avatarUrl = url;
+      const myAvatar = $('#my-avatar');
+      if (myAvatar) myAvatar.outerHTML = avatarHtml(state.profile.displayName, url, 'avatar-36').replace(
+        '<span class="avatar avatar-36"', '<span id="my-avatar" class="avatar avatar-36"');
+      const settingsAvatar = $('#settings-avatar');
+      if (settingsAvatar) settingsAvatar.outerHTML = avatarHtml(state.profile.displayName, url, 'avatar-56').replace(
+        '<span class="avatar avatar-56"', '<span id="settings-avatar" class="avatar avatar-56"');
+      toast('Аватар обновлён (демо)', 'success');
+      return;
+    }
+    try {
+      const upload = await state.client.uploadContent(file, { name: 'avatar', type: file.type });
+      const mxc = upload?.content_uri || upload;
+      await state.client.setAvatarUrl(mxc);
+      await refreshProfile();
+      toast('Аватар обновлён', 'success');
+    } catch (err) {
+      toast(err?.message || 'Не удалось обновить аватар', 'error');
+    }
+  });
+
   // Modals
   $('#modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'modal-backdrop') closeModals();
@@ -3565,6 +4081,16 @@ function bindEvents() {
 
   // Room leave (delegated)
   $('#room-info-body').addEventListener('click', async (e) => {
+    if (e.target.closest('#open-room-settings')) {
+      closeModals();
+      openRoomSettings();
+      return;
+    }
+    const member = e.target.closest('[data-member]');
+    if (member && !e.target.closest('#invite-btn')) {
+      openUserProfile(member.dataset.member);
+      return;
+    }
     const btn = e.target.closest('[data-leave-room]');
     if (btn) {
       leaveRoom(btn.dataset.leaveRoom);

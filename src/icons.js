@@ -69,6 +69,7 @@ const paths = {
   quote: '<path d="M6 17h3l2-4V7H5v6h3l-2 4ZM15 17h3l2-4V7h-6v6h3l-2 4Z"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   strikethrough: '<path d="M16 4H9a3 3 0 0 0-2.83 4M14 12a4 4 0 0 1 0 8H6M4 12h16"/>',
+  compass: '<circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z"/>',
   pin: '<path d="M12 17v5"/><path d="M9 10.8 4 15v2h16v-2l-5-4.2V5a2 2 0 0 0-2-2h-1a2 2 0 0 0-2 2Z"/>',
 };
 

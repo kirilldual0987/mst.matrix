@@ -1211,3 +1211,39 @@ body.voice-active .toast-stack { bottom: 150px; }
 .pinned-ico .ico { width: 15px; height: 15px; }
 .pinned-label { border: 0; background: transparent; color: var(--accent); font-weight: 600; font-size: 0.78rem; padding: 0; }
 .pinned-label:hover { text-decoration: underline; }
+
+/* Invites */
+.invites-block { border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.invite-list { padding: 0 10px 4px; }
+.invite-item { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 13px; }
+.invite-item:hover { background: var(--surface-2); }
+.invite-item .avatar { width: 38px; height: 38px; border-radius: 12px; font-size: 0.76rem; }
+.invite-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.invite-main strong { font-size: 0.84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.invite-main small { font-size: 0.7rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.invite-actions { display: flex; gap: 2px; flex: none; }
+.invite-actions .icon-btn { width: 30px; height: 30px; border-radius: 9px; }
+.invite-actions .accept { color: var(--ok); background: var(--ok-soft); }
+.invite-actions .decline { color: var(--danger); background: var(--danger-soft); }
+
+/* Directory & search rows */
+.directory-note { font-size: 0.78rem; color: var(--text-3); margin-bottom: 8px; }
+.directory-room, .search-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.directory-room:last-child, .search-row:last-child { border-bottom: 0; }
+.directory-room .avatar, .search-row .avatar { width: 40px; height: 40px; border-radius: 13px; font-size: 0.8rem; }
+.directory-main, .search-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.directory-main strong, .search-main strong { font-size: 0.88rem; }
+.directory-main small, .search-main small { font-size: 0.74rem; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-main p { margin: 3px 0 0; font-size: 0.78rem; color: var(--text-2); line-height: 1.45; overflow-wrap: anywhere; }
+.search-results { margin-top: 8px; }
+
+/* Room settings avatar row */
+.room-avatar-row { display: flex; align-items: center; gap: 12px; margin: 10px 0 4px; }
+.room-avatar-row .btn .ico { width: 15px; height: 15px; }
+.profile-avatar-row { display: flex; align-items: center; gap: 8px; }
+.avatar-upload .ico { width: 15px; height: 15px; }
+.member-row { cursor: pointer; }
+.msg-avatar { cursor: pointer; }

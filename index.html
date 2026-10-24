@@ -105,6 +105,11 @@
             <kbd>⌘K</kbd>
           </div>
 
+          <div class="invites-block hidden" id="invites-block">
+            <div class="room-list-head"><span>Приглашения</span><span class="room-count" id="invite-count">0</span></div>
+            <nav class="invite-list" id="invite-list"></nav>
+          </div>
+
           <div class="room-list-head">
             <span>Чаты</span>
             <span class="room-count" id="room-count">0</span>
@@ -231,7 +236,13 @@
               <label for="display-name">Отображаемое имя</label>
               <div class="input-wrap"><input id="display-name" type="text" placeholder="Ваше имя" /></div>
             </div>
-            <button class="btn btn-soft btn-sm" id="save-name-btn">Сохранить имя</button>
+            <div class="profile-avatar-row">
+              <button class="btn btn-soft btn-sm" id="save-name-btn">Сохранить имя</button>
+              <label class="btn btn-ghost btn-sm avatar-upload">
+                <span data-icon="camera"></span> Аватар
+                <input type="file" id="avatar-input" accept="image/*" hidden />
+              </label>
+            </div>
           </section>
 
           <section class="settings-section">
@@ -305,6 +316,7 @@
               <div class="input-wrap"><input id="join-room-id" type="text" placeholder="#room:matrix.org" /></div>
             </div>
             <button class="btn btn-primary btn-block" id="join-room-submit">Войти в комнату</button>
+            <button class="btn btn-ghost btn-sm btn-block" id="open-directory-from-join" style="margin-top:8px;" data-icon="compass">Найти комнату в директории</button>
           </div>
           <div id="tab-dm" class="hidden">
             <div class="field">
@@ -361,6 +373,75 @@
           <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
         </header>
         <div class="modal-body" id="recap-body"></div>
+      </div>
+
+      <!-- Directory -->
+      <div class="modal" id="directory-modal" role="dialog" aria-modal="true" aria-labelledby="directory-title">
+        <header class="modal-head">
+          <h3 id="directory-title">Директория комнат</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <div class="invite-row" style="margin-bottom:12px;">
+            <input id="directory-search" type="text" placeholder="Название или тема комнаты…" />
+            <button class="btn btn-primary btn-sm" id="directory-search-btn">Искать</button>
+          </div>
+          <div id="directory-results" class="directory-results"></div>
+        </div>
+      </div>
+
+      <!-- Global search -->
+      <div class="modal" id="search-modal" role="dialog" aria-modal="true" aria-labelledby="search-title">
+        <header class="modal-head">
+          <h3 id="search-title">Поиск</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <div class="invite-row" style="margin-bottom:10px;">
+            <input id="search-query" type="text" placeholder="Что ищем?" />
+            <button class="btn btn-primary btn-sm" id="search-run">Искать</button>
+          </div>
+          <div class="tabs" id="search-tabs">
+            <button class="active" data-stab="messages">Сообщения</button>
+            <button data-stab="rooms">Комнаты</button>
+            <button data-stab="people">Люди</button>
+          </div>
+          <div id="search-results" class="search-results"></div>
+        </div>
+      </div>
+
+      <!-- Room settings -->
+      <div class="modal modal-sm" id="room-settings-modal" role="dialog" aria-modal="true" aria-labelledby="room-settings-title">
+        <header class="modal-head">
+          <h3 id="room-settings-title">Настройки комнаты</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <div class="field">
+            <label for="room-settings-name">Название</label>
+            <div class="input-wrap"><input id="room-settings-name" type="text" /></div>
+          </div>
+          <div class="field">
+            <label for="room-settings-topic">Тема</label>
+            <div class="input-wrap"><input id="room-settings-topic" type="text" /></div>
+          </div>
+          <div class="field">
+            <label for="room-settings-alias">Добавить алиас</label>
+            <div class="input-wrap"><input id="room-settings-alias" type="text" placeholder="#my-alias:matrix.org" /></div>
+          </div>
+          <div class="room-avatar-row" id="room-avatar-settings"></div>
+          <p class="form-error" id="room-settings-error"></p>
+          <button class="btn btn-primary btn-block" id="room-settings-save">Сохранить</button>
+        </div>
+      </div>
+
+      <!-- User profile -->
+      <div class="modal modal-sm" id="user-modal" role="dialog" aria-modal="true" aria-labelledby="user-title">
+        <header class="modal-head">
+          <h3 id="user-title">Профиль</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="user-body"></div>
       </div>
 
       <!-- Lightbox -->
