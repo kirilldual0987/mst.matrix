@@ -1299,3 +1299,29 @@ body.voice-active .toast-stack { bottom: 150px; }
 .space-item .avatar { width: 34px; height: 34px; border-radius: 11px; font-size: 0.72rem; }
 .space-item span { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spaces-block { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+
+/* E2EE / verification */
+.devices-body { display: flex; flex-direction: column; gap: 4px; }
+.device-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border: 1px solid var(--border); border-radius: 12px;
+}
+.device-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.device-main strong { font-size: 0.84rem; }
+.device-main strong em { color: var(--accent); font-style: normal; font-size: 0.74rem; }
+.device-main small { font-size: 0.7rem; color: var(--text-3); overflow-wrap: anywhere; }
+.security-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.verify-wait { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 0; text-align: center; color: var(--text-2); font-size: 0.85rem; }
+.verify-wait .ico { width: 26px; height: 26px; color: var(--accent); animation: spin 0.9s linear infinite; }
+.verify-done { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 0; text-align: center; color: var(--ok); }
+.verify-done .ico { width: 34px; height: 34px; }
+.verify-done.warn { color: var(--danger); }
+.sas-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 12px 0; }
+.sas-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 2px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.sas-cell span { font-size: 1.6rem; }
+.sas-cell small { font-size: 0.58rem; color: var(--text-3); text-align: center; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.trust-ok { color: var(--ok); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.trust-ok .ico { width: 16px; height: 16px; }
+.trust-warn { color: var(--danger); font-weight: 600; }
+.trust-muted { color: var(--text-3); }
+#user-trust { margin-bottom: 12px; }

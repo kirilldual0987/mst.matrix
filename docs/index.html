@@ -9,8 +9,8 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237c5cff'/%3E%3Ccircle cx='20' cy='32' r='6' fill='white'/%3E%3Ccircle cx='32' cy='32' r='6' fill='white' opacity='.7'/%3E%3Ccircle cx='44' cy='32' r='6' fill='white' opacity='.4'/%3E%3C/svg%3E" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
-    <script type="module" crossorigin src="./assets/index-BL_UuN04.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-D6mRFrQv.css">
+    <script type="module" crossorigin src="./assets/index-BGUqMxXp.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Evvkarjz.css">
   </head>
   <body>
     <div id="app">
@@ -284,6 +284,16 @@
           </section>
 
           <section class="settings-section">
+            <h4>Безопасность</h4>
+            <div id="devices-body" class="devices-body"><p class="muted">Загрузка устройств…</p></div>
+            <div class="security-actions">
+              <button class="btn btn-soft btn-sm" id="load-devices" data-icon="refresh">Обновить</button>
+              <button class="btn btn-soft btn-sm" id="self-verify" data-icon="shield">Проверить другое устройство</button>
+            </div>
+            <p class="muted" id="security-note"></p>
+          </section>
+
+          <section class="settings-section">
             <h4>О клиенте</h4>
             <p class="muted">mst.matrix · статический веб-клиент Matrix на matrix-js-sdk. Работает прямо в браузере.</p>
             <p class="muted" id="client-status"></p>
@@ -490,6 +500,15 @@
           <p class="form-error" id="room-settings-error"></p>
           <button class="btn btn-primary btn-block" id="room-settings-save">Сохранить</button>
         </div>
+      </div>
+
+      <!-- Verification -->
+      <div class="modal modal-sm" id="verify-modal" role="dialog" aria-modal="true" aria-labelledby="verify-title">
+        <header class="modal-head">
+          <h3 id="verify-title">Проверка устройства</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="verify-body"></div>
       </div>
 
       <!-- User profile -->

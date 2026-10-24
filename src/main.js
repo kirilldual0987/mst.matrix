@@ -29,6 +29,7 @@ const state = {
   loadingOlder: false,
   roomAvatarFile: null,
   searchTab: 'messages',
+  verify: { request: null, verifier: null, sas: null, user: null, device: null },
   commandItems: [],
   commandIndex: 0,
   replyingTo: null,
@@ -645,6 +646,20 @@ function attachClient(client) {
     }
     if (syncState === 'ERROR') {
       console.warn('Matrix sync error');
+    }
+  });
+  client.on('crypto.verificationRequestReceived', (request) => {
+    toast(`Запрос на проверку от ${request?.otherUserId || 'пользователя'}`, 'info', 8000);
+    openVerifyModal(request, request?.otherUserId || 'пользователь', request?.otherDeviceId || null);
+    if (request && !request.initiatedByMe) {
+      setVerifyBody(`
+        <div class="verify-wait"><p><strong>${escapeHtml(request.otherUserId || '')}</strong> хочет проверить устройство.<br><small>${escapeHtml(request.otherDeviceId || '')}</small></p></div>
+        <div class="modal-actions"><button class="btn btn-primary" id="verify-accept">Принять</button><button class="btn btn-ghost" id="verify-reject">Отклонить</button></div>`);
+      $('#verify-accept').addEventListener('click', () => {
+        request.accept().catch((err) => toast(err?.message || 'Ошибка', 'error'));
+        renderVerifyUI();
+      });
+      $('#verify-reject').addEventListener('click', cancelVerification);
     }
   });
   client.on('Session.logged_out', () => {
@@ -3297,6 +3312,278 @@ async function saveRoomSettings() {
   }
 }
 
+/* ════════════════════════════════════════════════════════════
+   E2EE: devices, trust and SAS verification
+   ════════════════════════════════════════════════════════════ */
+const PHASE_READY = 3;
+const PHASE_STARTED = 4;
+const PHASE_CANCELLED = 5;
+const PHASE_DONE = 6;
+
+function cryptoApi() {
+  return state.client?.getCrypto?.();
+}
+
+function deviceTrustLabel(status) {
+  if (!status) return 'неизвестно';
+  if (status.isVerified?.()) return 'проверено';
+  if (status.crossSigningVerified) return 'подписано ключом';
+  if (status.signedByOwner) return 'подписано владельцем';
+  return 'не проверено';
+}
+
+function setVerifyBody(html) {
+  const body = $('#verify-body');
+  if (body) body.innerHTML = html;
+}
+
+function renderVerifyUI() {
+  const v = state.verify;
+  if (!v.request) {
+    setVerifyBody('<div class="bookmark-empty">Нет активной проверки</div>');
+    return;
+  }
+  const phase = v.request.phase;
+  if (phase === PHASE_DONE) {
+    setVerifyBody(`<div class="verify-done">${icon('check-check')}<p>Проверка успешно завершена.<br>Устройство теперь доверенное.</p></div>`);
+    setTimeout(closeModals, 1400);
+    return;
+  }
+  if (phase === PHASE_CANCELLED) {
+    setVerifyBody(`<div class="verify-done warn">${icon('alert')}<p>Проверка отменена.</p></div>`);
+    setTimeout(closeModals, 1200);
+    return;
+  }
+  if (v.sas) {
+    const emojis = v.sas.sas?.emoji || [];
+    setVerifyBody(`
+      <p class="muted" style="margin-top:0;font-size:0.82rem;">Сравните эмодзи на обоих устройствах. Если они совпадают — подтвердите.</p>
+      <div class="sas-grid">${emojis.map(([emoji, name]) => `<div class="sas-cell"><span>${emoji}</span><small>${escapeHtml(name || '')}</small></div>`).join('')}</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="sas-mismatch">Не совпадают</button>
+        <button class="btn btn-primary" id="sas-confirm">Совпадают</button>
+      </div>`);
+    $('#sas-confirm').addEventListener('click', () => {
+      state.verify.sas?.confirm?.().catch((err) => toast(err?.message || 'Ошибка подтверждения', 'error'));
+    });
+    $('#sas-mismatch').addEventListener('click', () => {
+      state.verify.sas?.mismatch?.();
+    });
+    return;
+  }
+  setVerifyBody(`
+    <div class="verify-wait">${icon('loader')}<p>Ожидание второй стороны…<br><small>Подтвердите проверку на другом устройстве.</small></p></div>
+    <div class="modal-actions"><button class="btn btn-ghost" id="verify-cancel">Отмена</button></div>`);
+  $('#verify-cancel').addEventListener('click', cancelVerification);
+}
+
+function onVerificationChange() {
+  const v = state.verify;
+  const request = v.request;
+  if (!request) return;
+  const phase = request.phase;
+  if (phase === PHASE_DONE) {
+    toast('Устройство проверено ✓', 'success');
+    renderVerifyUI();
+    refreshUserTrust(state.currentRoomId ? request.otherUserId : null);
+    return;
+  }
+  if (phase === PHASE_CANCELLED) {
+    toast('Проверка отменена', 'info');
+    renderVerifyUI();
+    return;
+  }
+  if (phase === PHASE_READY && request.initiatedByMe && !request.verifier && !v.starting) {
+    v.starting = true;
+    request.startVerification('m.sas.v1')
+      .then((verifier) => {
+        attachVerifier(verifier);
+        return verifier.verify();
+      })
+      .catch((err) => {
+        v.starting = false;
+        if (request.phase !== PHASE_CANCELLED && request.phase !== PHASE_DONE) {
+          toast(err?.message || 'Не удалось начать проверку', 'error');
+        }
+      });
+    return;
+  }
+  if (phase === PHASE_STARTED && !v.verifier) {
+    const verifier = request.verifier;
+    if (verifier) {
+      attachVerifier(verifier);
+      verifier.verify().catch(() => {});
+    }
+  }
+  renderVerifyUI();
+}
+
+function attachVerifier(verifier) {
+  state.verify.verifier = verifier;
+  verifier.on?.('show_sas', (sas) => {
+    state.verify.sas = sas;
+    renderVerifyUI();
+  });
+}
+
+function openVerifyModal(request, user, device) {
+  state.verify = { request, verifier: null, sas: null, user, device };
+  request.on?.('change', onVerificationChange);
+  $('#verify-title').textContent = user === state.userId ? 'Проверка ваших устройств' : `Проверка: ${user || ''}`;
+  openModal('verify-modal');
+  renderVerifyUI();
+}
+
+function cancelVerification() {
+  try {
+    state.verify.sas?.cancel?.();
+  } catch {}
+  try {
+    state.verify.request?.cancel?.({ code: 'm.user', reason: 'Отменено пользователем' });
+  } catch {}
+  closeModals();
+}
+
+async function beginDeviceVerification(userId, deviceId) {
+  const crypto = cryptoApi();
+  if (!crypto) {
+    toast('Шифрование недоступно на этом устройстве', 'error');
+    return;
+  }
+  try {
+    const request = await crypto.requestDeviceVerification(userId, deviceId);
+    openVerifyModal(request, userId, deviceId);
+  } catch (err) {
+    toast(err?.message || 'Не удалось отправить запрос на проверку', 'error');
+  }
+}
+
+async function beginSelfVerification() {
+  const crypto = cryptoApi();
+  if (!crypto) {
+    toast('Шифрование недоступно на этом устройстве', 'error');
+    return;
+  }
+  try {
+    const request = await crypto.requestOwnUserVerification();
+    openVerifyModal(request, state.userId, null);
+  } catch (err) {
+    toast(err?.message || 'Не удалось начать проверку', 'error');
+  }
+}
+
+async function openDeviceVerify(userId) {
+  const crypto = cryptoApi();
+  if (!crypto) {
+    toast('Шифрование недоступно на этом устройстве', 'error');
+    return;
+  }
+  setVerifyBody('<div class="verify-wait">' + icon('loader') + '<p>Загружаем устройства…</p></div>');
+  $('#verify-title').textContent = 'Выбор устройства';
+  openModal('verify-modal');
+  try {
+    const info = await crypto.getUserDeviceInfo([userId], true);
+    const devices = Object.values(info?.[userId] || {});
+    if (!devices.length) {
+      setVerifyBody('<div class="bookmark-empty">Устройства не найдены</div>');
+      return;
+    }
+    const rows = [];
+    for (const device of devices) {
+      const status = await crypto.getDeviceVerificationStatus(userId, device.deviceId).catch(() => null);
+      rows.push(`
+        <div class="device-row">
+          <span class="device-main"><strong>${escapeHtml(device.getDisplayName?.() || device.deviceId)}</strong><small>${escapeHtml(device.deviceId)} · ${escapeHtml(deviceTrustLabel(status))}</small></span>
+          <button class="btn btn-primary btn-sm" data-verify-device="${escapeAttr(device.deviceId)}">Проверить</button>
+        </div>`);
+    }
+    setVerifyBody(rows.join(''));
+    $$('#verify-body [data-verify-device]').forEach((btn) => {
+      btn.addEventListener('click', () => beginDeviceVerification(userId, btn.dataset.verifyDevice));
+    });
+  } catch (err) {
+    setVerifyBody(`<div class="bookmark-empty">${escapeHtml(err?.message || 'Не удалось загрузить устройства')}</div>`);
+  }
+}
+
+async function refreshUserTrust(userId) {
+  const el = $('#user-trust');
+  if (!el || !userId) return;
+  const crypto = cryptoApi();
+  if (!crypto) {
+    el.innerHTML = '';
+    return;
+  }
+  try {
+    const userStatus = await crypto.getUserVerificationStatus(userId);
+    const info = await crypto.getUserDeviceInfo([userId], false).catch(() => ({}));
+    const devices = Object.values(info?.[userId] || {});
+    let verified = 0;
+    for (const device of devices) {
+      const st = await crypto.getDeviceVerificationStatus(userId, device.deviceId).catch(() => null);
+      if (st?.isVerified?.()) verified += 1;
+    }
+    const label = userStatus.isVerified?.()
+      ? `<span class="trust-ok">${icon('shield')} Проверен</span>`
+      : userStatus.needsUserApproval
+        ? '<span class="trust-warn">Идентичность изменилась</span>'
+        : '<span class="trust-muted">Не проверен</span>';
+    el.innerHTML = `
+      <div class="info-row">${icon('shield')}<span>${label}</span><small style="margin-left:auto;">${verified}/${devices.length} устройств</small></div>
+      <div class="security-actions" style="margin-top:10px;">
+        <button class="btn btn-soft btn-sm" id="user-verify-btn" data-icon="shield">Проверить устройство</button>
+        ${userStatus.needsUserApproval ? `<button class="btn btn-ghost btn-sm" id="user-pin-btn">Доверять новой идентичности</button>` : ''}
+      </div>`;
+    $('#user-verify-btn')?.addEventListener('click', () => openDeviceVerify(userId));
+    $('#user-pin-btn')?.addEventListener('click', async () => {
+      try {
+        await crypto.pinCurrentUserIdentity(userId);
+        toast('Идентичность подтверждена', 'success');
+        refreshUserTrust(userId);
+      } catch (err) {
+        toast(err?.message || 'Не удалось подтвердить идентичность', 'error');
+      }
+    });
+  } catch {
+    el.innerHTML = '';
+  }
+}
+
+async function loadMyDevices() {
+  const el = $('#devices-body');
+  if (!el || !state.client) return;
+  el.innerHTML = '<p class="muted">Загрузка устройств…</p>';
+  try {
+    const { devices } = await state.client.getDevices();
+    const crypto = cryptoApi();
+    const rows = [];
+    for (const device of devices) {
+      let trust = '';
+      if (crypto) {
+        const st = await crypto.getDeviceVerificationStatus(state.userId, device.device_id).catch(() => null);
+        trust = st ? deviceTrustLabel(st) : '—';
+      }
+      const isCurrent = device.device_id === state.client.getDeviceId();
+      rows.push(`
+        <div class="device-row">
+          <span class="device-main">
+            <strong>${escapeHtml(device.display_name || device.device_id)}${isCurrent ? ' <em>(это устройство)</em>' : ''}</strong>
+            <small>${escapeHtml(device.device_id)} · ${escapeHtml(trust)}${device.last_seen_ts ? ' · видели ' + formatListTime(device.last_seen_ts) : ''}</small>
+          </span>
+        </div>`);
+    }
+    el.innerHTML = rows.join('') || '<p class="muted">Устройства не найдены</p>';
+    const note = $('#security-note');
+    if (note) {
+      note.textContent = crypto
+        ? 'Совет: проверьте все устройства, чтобы старые зашифрованные сообщения открывались и на них.'
+        : 'End-to-end шифрование не инициализировано в этом браузере.';
+    }
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${escapeHtml(err?.message || 'Не удалось загрузить устройства')}</p>`;
+  }
+}
+
 /* User profile */
 async function openUserProfile(userId) {
   if (!userId) return;
@@ -3331,8 +3618,10 @@ async function openUserProfile(userId) {
       <small>${escapeHtml(userId)}</small>
       ${power !== null ? `<small>Права в комнате: ${power}</small>` : ''}
     </div>
+    <div id="user-trust"></div>
     <button class="btn btn-primary btn-block" id="user-dm-btn">${icon('message-plus')} Написать сообщение</button>
     <button class="btn btn-ghost btn-block" id="user-copy-btn" style="margin-top:8px;">${icon('copy')} Скопировать Matrix ID</button>`;
+  if (!state.demo) refreshUserTrust(userId);
   openModal('user-modal');
 
   $('#user-dm-btn').addEventListener('click', () => {
@@ -3415,6 +3704,8 @@ function openSettings() {
   applyAccent();
   $('#sound-toggle').checked = state.prefs.sound;
   $('#notify-toggle').checked = state.prefs.notify;
+  if (!state.demo) loadMyDevices();
+  else $('#devices-body').innerHTML = '<p class="muted">Демо-режим — устройства не загружаются</p>';
   openModal('settings-modal');
 }
 
@@ -4409,6 +4700,10 @@ function bindEvents() {
       sendThreadReply();
     }
   });
+
+  // E2EE
+  $('#load-devices').addEventListener('click', loadMyDevices);
+  $('#self-verify').addEventListener('click', beginSelfVerification);
 
   // Room settings
   $('#room-settings-save').addEventListener('click', saveRoomSettings);

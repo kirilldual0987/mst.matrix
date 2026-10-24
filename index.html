@@ -283,6 +283,16 @@
           </section>
 
           <section class="settings-section">
+            <h4>Безопасность</h4>
+            <div id="devices-body" class="devices-body"><p class="muted">Загрузка устройств…</p></div>
+            <div class="security-actions">
+              <button class="btn btn-soft btn-sm" id="load-devices" data-icon="refresh">Обновить</button>
+              <button class="btn btn-soft btn-sm" id="self-verify" data-icon="shield">Проверить другое устройство</button>
+            </div>
+            <p class="muted" id="security-note"></p>
+          </section>
+
+          <section class="settings-section">
             <h4>О клиенте</h4>
             <p class="muted">mst.matrix · статический веб-клиент Matrix на matrix-js-sdk. Работает прямо в браузере.</p>
             <p class="muted" id="client-status"></p>
@@ -489,6 +499,15 @@
           <p class="form-error" id="room-settings-error"></p>
           <button class="btn btn-primary btn-block" id="room-settings-save">Сохранить</button>
         </div>
+      </div>
+
+      <!-- Verification -->
+      <div class="modal modal-sm" id="verify-modal" role="dialog" aria-modal="true" aria-labelledby="verify-title">
+        <header class="modal-head">
+          <h3 id="verify-title">Проверка устройства</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="verify-body"></div>
       </div>
 
       <!-- User profile -->
