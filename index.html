@@ -171,12 +171,26 @@
               <button class="icon-btn" id="chat-search-close" data-icon="x" aria-label="Закрыть поиск"></button>
             </div>
 
+            <div class="pinned-bar hidden" id="pinned-bar">
+              <span class="pinned-ico" data-icon="pin"></span>
+              <button class="pinned-label" id="pinned-label">Закреплённые сообщения</button>
+            </div>
+
             <div class="message-scroll" id="message-scroll">
               <div class="messages" id="messages"></div>
             </div>
 
             <div class="composer-wrap">
               <div id="typing" class="typing"></div>
+              <div class="md-toolbar" id="md-toolbar" role="toolbar" aria-label="Форматирование">
+                <button type="button" class="md-btn" data-md="bold" title="Жирный · Ctrl+B" data-icon="bold"></button>
+                <button type="button" class="md-btn" data-md="italic" title="Курсив · Ctrl+I" data-icon="italic"></button>
+                <button type="button" class="md-btn" data-md="strike" title="Зачёркнутый" data-icon="strikethrough"></button>
+                <button type="button" class="md-btn" data-md="code" title="Код" data-icon="code"></button>
+                <button type="button" class="md-btn" data-md="link" title="Ссылка" data-icon="link"></button>
+                <button type="button" class="md-btn" data-md="quote" title="Цитата" data-icon="quote"></button>
+                <button type="button" class="md-btn" data-md="list" title="Список" data-icon="list"></button>
+              </div>
               <div class="composer">
                 <button class="icon-btn" id="attach-btn" title="Прикрепить файл" data-icon="paperclip"></button>
                 <input type="file" id="file-input" multiple hidden />
@@ -320,6 +334,15 @@
           <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
         </header>
         <div class="modal-body" id="profile-body"></div>
+      </div>
+
+      <!-- Pinned -->
+      <div class="modal modal-sm" id="pinned-modal" role="dialog" aria-modal="true" aria-labelledby="pinned-title">
+        <header class="modal-head">
+          <h3 id="pinned-title">Закреплённые сообщения</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="pinned-body"></div>
       </div>
 
       <!-- Bookmarks -->

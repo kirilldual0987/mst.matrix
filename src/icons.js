@@ -63,6 +63,12 @@ const paths = {
   'volume-2': '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
   loader: '<path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/>',
   star: '<path d="m12 2 3.1 6.3L22 9.3l-5 4.9 1.2 6.9L12 17.8 5.8 21l1.2-6.9-5-4.9 6.9-1L12 2Z"/>',
+  bold: '<path d="M7 5h6a4 4 0 0 1 0 8H7V5ZM7 13h7a4 4 0 0 1 0 8H7v-8Z"/>',
+  italic: '<path d="M19 4h-9M14 20H5M15 4 9 20"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  quote: '<path d="M6 17h3l2-4V7H5v6h3l-2 4ZM15 17h3l2-4V7h-6v6h3l-2 4Z"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  strikethrough: '<path d="M16 4H9a3 3 0 0 0-2.83 4M14 12a4 4 0 0 1 0 8H6M4 12h16"/>',
   pin: '<path d="M12 17v5"/><path d="M9 10.8 4 15v2h16v-2l-5-4.2V5a2 2 0 0 0-2-2h-1a2 2 0 0 0-2 2Z"/>',
 };
 

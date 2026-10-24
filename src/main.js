@@ -1,5 +1,6 @@
 import * as matrixcs from 'matrix-js-sdk';
 import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
+import { renderEmojiPicker } from './emoji.js';
 import { hydrateIcons, icon } from './icons.js';
 import './style.css';
 
@@ -50,17 +51,7 @@ const DEMO_AUDIO = 'data:audio/wav;base64,UklGRjQnAABXQVZFZm10IBAAAAABAAEAQB8AAE
 
 const watchedTypingMembers = new WeakSet();
 
-const EMOJIS = [
-  '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰',
-  '😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥳','😏','😒',
-  '😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡',
-  '🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🤭','🤫','🤥','😶',
-  '👍','👎','👏','🙌','🤝','🙏','💪','✌️','🤞','👌','🤌','🫶','❤️','🧡','💛','💚',
-  '💙','💜','🖤','🤍','💔','❣️','💕','💞','💓','💗','💖','💘','💝','🔥','✨','🎉',
-  '🎊','🥳','💯','✅','❌','⭐','🌟','💫','⚡','💥','🎯','🚀','🌈','☀️','🌙','☁️',
-];
-
-/* ════════════════════════════════════════════════════════════
+/* ═
    Small utilities
    ════════════════════════════════════════════════════════════ */
 function escapeHtml(str = '') {
@@ -144,9 +135,7 @@ function formatBytes(n = 0) {
   return `${(n / 1024 / 1024).toFixed(1)} МБ`;
 }
 
-function formatText(text = '') {
-  let html = escapeHtml(text);
-
+function mdHtml(html) {
   html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
   html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -157,6 +146,37 @@ function formatText(text = '') {
     (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
   );
   return html;
+}
+
+function formatText(text = '') {
+  return mdHtml(escapeHtml(text));
+}
+
+function escapeRegExp(str = '') {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function mentionMap(room) {
+  const map = new Map();
+  const members = state.demo
+    ? (room?.members || []).map((m) => ({ userId: m.id, name: m.name }))
+    : (room?.getMembers?.() || []).map((m) => ({ userId: m.userId, name: m.name }));
+  for (const member of members) {
+    if (member.userId && member.userId !== state.userId) map.set(member.userId, member.name);
+  }
+  if (state.userId && state.profile.displayName) map.set(state.userId, state.profile.displayName);
+  return map;
+}
+
+function formatTextWithMentions(text, room) {
+  let html = escapeHtml(text);
+  const map = mentionMap(room);
+  for (const [userId, name] of map) {
+    if (!userId) continue;
+    const rx = new RegExp(`@${escapeRegExp(userId.replace(/^@/, ''))}`, 'g');
+    html = html.replace(rx, `<span class="mention-pill">@${escapeHtml(name || userId)}</span>`);
+  }
+  return mdHtml(html);
 }
 
 function mxcToUrl(mxc, w = 800, h = 800, method = 'scale') {
@@ -819,6 +839,7 @@ function renderRoomHeader() {
       '<span class="avatar avatar-42"',
       '<span id="room-avatar" class="avatar avatar-42"'
     );
+    renderPinnedBar();
     return;
   }
 
@@ -834,9 +855,11 @@ function renderRoomHeader() {
       '<span id="room-avatar" class="avatar avatar-42"'
     );
   }
+  renderPinnedBar();
 }
 
 function selectRoom(roomId) {
+  closeMentionPop();
   if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
   $$('.msg.tools-open').forEach((m) => m.classList.remove('tools-open'));
   state.currentRoomId = roomId;
@@ -1094,7 +1117,24 @@ function messageBodyHtml(msg) {
   if (msg.msgtype === 'm.notice') {
     return `<span class="muted">${formatText(msg.body)}</span>`;
   }
-  return formatText(msg.body || '');
+  return formatTextWithMentions(msg.body || '', getCurrentRoom());
+}
+
+function readReceiptHtml(msg) {
+  if (!msg.own || state.demo) return '';
+  const room = getCurrentRoom();
+  if (!room) return '';
+  const event = room.findEventById?.(msg.id);
+  if (!event) return '';
+  if (event.status !== null && event.status !== undefined) {
+    return `<span class="read-mark pending" title="Отправляется…">${icon('clock')}</span>`;
+  }
+  const receipts = room.getReceiptsForEvent?.(event) || [];
+  const readers = receipts.filter((r) => r.userId !== state.userId && (r.type === 'm.read' || !r.type));
+  if (readers.length) {
+    return `<span class="read-mark read" title="Прочитано: ${readers.length}">${icon('check-check')}</span>`;
+  }
+  return `<span class="read-mark" title="Отправлено">${icon('check')}</span>`;
 }
 
 function messageHtml(msg, grouped) {
@@ -1106,6 +1146,7 @@ function messageHtml(msg, grouped) {
       <button class="icon-btn" data-action="reply" data-event="${escapeAttr(msg.id)}" title="Ответить">${icon('reply')}</button>
       <button class="icon-btn" data-action="react" data-event="${escapeAttr(msg.id)}" title="Реакция">${icon('smile')}</button>
       <button class="icon-btn ${saved ? 'is-saved' : ''}" data-action="bookmark" data-event="${escapeAttr(msg.id)}" title="${saved ? 'Убрать из сохранённых' : 'Сохранить'}">${icon(saved ? 'bookmark-filled' : 'bookmark')}</button>
+      ${canPin(getCurrentRoom()) && !msg.redacted ? `<button class="icon-btn ${isPinned(msg.id) ? 'is-saved' : ''}" data-action="pin" data-event="${escapeAttr(msg.id)}" title="${isPinned(msg.id) ? 'Открепить' : 'Закрепить'}">${icon('pin')}</button>` : ''}
       ${own ? `<button class="icon-btn" data-action="edit" data-event="${escapeAttr(msg.id)}" title="Изменить">${icon('edit')}</button>` : ''}
       ${own ? `<button class="icon-btn" data-action="delete" data-event="${escapeAttr(msg.id)}" title="Удалить">${icon('trash')}</button>` : ''}
       <button class="icon-btn" data-action="copy" data-event="${escapeAttr(msg.id)}" title="Копировать">${icon('copy')}</button>
@@ -1118,6 +1159,7 @@ function messageHtml(msg, grouped) {
         <span class="msg-sender">${escapeHtml(name)}</span>
         ${msg.threadRoot ? '<span class="thread-tag">ветка</span>' : ''}
         <span class="msg-time">${formatTime(msg.ts)}${msg.edited ? ' · изм.' : ''}</span>
+        ${readReceiptHtml(msg)}
       </div>
       <div class="bubble">
         ${msg.replyTo ? `<button type="button" class="reply-quote" data-action="jump-reply" data-event="${escapeAttr(msg.replyTo.id)}">
@@ -1857,6 +1899,112 @@ function isBookmarked(eventId) {
   return state.bookmarks.some((b) => b.id === eventId && b.roomId === state.currentRoomId);
 }
 
+function pinnedIds(room) {
+  if (state.demo) return room?.pinned || [];
+  const ev = room?.currentState?.getStateEvents?.('m.room.pinned_events', '');
+  const pinned = ev?.getContent?.()?.pinned;
+  return Array.isArray(pinned) ? pinned.filter(Boolean) : [];
+}
+
+function canPin(room) {
+  if (state.demo) return true;
+  return !!room?.currentState?.mayClientSendStateEvent?.('m.room.pinned_events', state.client);
+}
+
+function isPinned(eventId) {
+  return pinnedIds(getCurrentRoom()).includes(eventId);
+}
+
+function renderPinnedBar() {
+  const bar = $('#pinned-bar');
+  if (!bar) return;
+  const ids = pinnedIds(getCurrentRoom());
+  if (ids.length) {
+    bar.classList.remove('hidden');
+    $('#pinned-label').textContent = `Закреплено: ${ids.length}`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+function openPinnedModal() {
+  const room = getCurrentRoom();
+  const body = $('#pinned-body');
+  if (!room || !body) return;
+  const ids = pinnedIds(room);
+  if (!ids.length) {
+    body.innerHTML = `<div class="bookmark-empty">${icon('pin')}<p style="margin-top:10px;">Закреплённых сообщений пока нет.</p></div>`;
+    openModal('pinned-modal');
+    return;
+  }
+  const canManage = canPin(room);
+  body.innerHTML = ids.map((id) => {
+    let sender = '';
+    let text = 'Сообщение не найдено';
+    let ts = 0;
+    let avatar = '';
+    if (state.demo) {
+      const m = room.messages?.find((x) => x.id === id);
+      if (m) {
+        sender = m.name || '';
+        text = m.body || 'Голосовое сообщение';
+        ts = m.ts;
+        avatar = avatarHtml(m.name);
+      }
+    } else {
+      const ev = room.findEventById?.(id);
+      if (ev) {
+        const member = room.getMember?.(ev.getSender());
+        sender = member?.name || ev.getSender();
+        const c = ev.getContent() || {};
+        text = c.body || (c.msgtype === 'm.image' ? 'Изображение' : c.msgtype === 'm.audio' ? 'Аудио' : c.msgtype === 'm.file' ? 'Файл' : 'Сообщение');
+        ts = ev.getTs();
+        avatar = avatarHtml(sender, member?.getAvatarUrl?.(state.client?.getHomeserverUrl?.(), 64, 64, 'crop'));
+      }
+    }
+    return `
+      <div class="bookmark-item">
+        <button class="bookmark-main" data-pinned-jump="${escapeAttr(id)}" style="border:0;background:transparent;text-align:left;padding:0;display:flex;gap:10px;align-items:flex-start;flex:1;min-width:0;">
+          ${avatar}
+          <span class="bookmark-main" style="display:flex;flex-direction:column;gap:3px;min-width:0;">
+            <strong>${escapeHtml(sender || 'Участник')}</strong>
+            <p>${escapeHtml(text).slice(0, 400)}</p>
+            <small>${ts ? formatDateLabel(ts) + ' · ' + formatTime(ts) : ''}</small>
+          </span>
+        </button>
+        ${canManage ? `<button class="icon-btn bookmark-del" data-pinned-remove="${escapeAttr(id)}" title="Открепить">${icon('pin')}</button>` : ''}
+      </div>`;
+  }).join('');
+  openModal('pinned-modal');
+}
+
+async function togglePin(msg) {
+  const room = getCurrentRoom();
+  if (!room || !msg) return;
+  const list = [...pinnedIds(room)];
+  const idx = list.indexOf(msg.id);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+    toast('Сообщение откреплено', 'info', 1800);
+  } else {
+    list.push(msg.id);
+    toast('Сообщение закреплено', 'success', 1800);
+  }
+  if (state.demo) {
+    room.pinned = list;
+    renderPinnedBar();
+    renderMessages(false);
+    return;
+  }
+  try {
+    await state.client.sendStateEvent(room.roomId, 'm.room.pinned_events', { pinned: list }, '');
+    renderPinnedBar();
+    renderMessages(false);
+  } catch {
+    toast('Не удалось изменить закреплённые сообщения', 'error');
+  }
+}
+
 function messageLabel(msg) {
   if (!msg) return 'Сообщение';
   if (msg.body) return msg.body;
@@ -2032,6 +2180,11 @@ async function handleMessageAction(action, eventId, el) {
     return;
   }
 
+  if (action === 'pin') {
+    togglePin(msg);
+    return;
+  }
+
   if (action === 'edit') {
     if (!msg.own) return;
     const newText = await openPrompt('Изменить сообщение', 'Новый текст', msg.body, 'Сохранить', true);
@@ -2116,7 +2269,7 @@ async function toggleReaction(key, targetId, reactionEventId) {
 /* ════════════════════════════════════════════════════════════
    Emoji picker
    ════════════════════════════════════════════════════════════ */
-function openEmojiPicker(anchor, targetEventId = null, mode = 'insert') {
+function openEmojiPicker(anchor, targetEventId = null) {
   const pop = $('#emoji-pop');
   if (!pop) return;
 
@@ -2125,24 +2278,10 @@ function openEmojiPicker(anchor, targetEventId = null, mode = 'insert') {
     return;
   }
 
-  pop.innerHTML = `
-    <h5>${targetEventId ? 'Реакция' : 'Эмодзи'}</h5>
-    <div class="emoji-grid">${EMOJIS.map((e) => `<button data-emoji="${escapeAttr(e)}">${e}</button>`).join('')}</div>`;
+  pop.style.width = '330px';
   pop.classList.remove('hidden');
-
-  const rect = anchor?.getBoundingClientRect();
-  const width = pop.offsetWidth || 300;
-  const height = pop.offsetHeight || 330;
-  let left = rect ? rect.left : window.innerWidth / 2 - width / 2;
-  let top = rect ? rect.bottom + 8 : window.innerHeight / 2;
-  if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
-  if (top + height > window.innerHeight - 12) top = (rect ? rect.top - height - 8 : window.innerHeight - height - 12);
-  pop.style.left = Math.max(12, left) + 'px';
-  pop.style.top = Math.max(12, top) + 'px';
-
-  pop.querySelectorAll('[data-emoji]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const emoji = btn.dataset.emoji;
+  renderEmojiPicker(pop, {
+    onPick: (emoji) => {
       pop.classList.add('hidden');
       if (targetEventId) {
         const msg = findMessage(targetEventId);
@@ -2151,8 +2290,18 @@ function openEmojiPicker(anchor, targetEventId = null, mode = 'insert') {
       } else {
         insertAtCursor($('#message-input'), emoji);
       }
-    });
+    },
   });
+
+  const rect = anchor?.getBoundingClientRect();
+  const width = pop.offsetWidth || 330;
+  const height = pop.offsetHeight || 400;
+  let left = rect ? rect.left : window.innerWidth / 2 - width / 2;
+  let top = rect ? rect.bottom + 8 : window.innerHeight / 2;
+  if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
+  if (top + height > window.innerHeight - 12) top = (rect ? rect.top - height - 8 : window.innerHeight - height - 12);
+  pop.style.left = Math.max(12, left) + 'px';
+  pop.style.top = Math.max(12, top) + 'px';
 }
 
 function insertAtCursor(el, text) {
@@ -2163,6 +2312,141 @@ function insertAtCursor(el, text) {
   el.selectionStart = el.selectionEnd = start + text.length;
   el.focus();
   resizeComposer();
+}
+
+/* ───────── Mentions autocomplete ───────── */
+const mentionState = { open: false, items: [], index: 0, tokenStart: 0, query: '' };
+
+function mentionLocalCandidates(room) {
+  if (!room) return [];
+  const seen = new Set();
+  const out = [];
+  const members = state.demo
+    ? (room.members || []).map((m) => ({ id: m.id, name: m.name, avatar: null }))
+    : (room.getMembers?.() || []).map((m) => ({
+        id: m.userId,
+        name: m.name || m.userId,
+        avatar: m.getAvatarUrl?.(state.client?.getHomeserverUrl?.(), 48, 48, 'crop') || null,
+      }));
+  for (const m of members) {
+    if (!m.id || m.id === state.userId || seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  return out;
+}
+
+function openMentionPop(items, tokenStart, query) {
+  const pop = $('#mention-pop');
+  if (!pop) return;
+  mentionState.open = true;
+  mentionState.items = items;
+  mentionState.index = 0;
+  mentionState.tokenStart = tokenStart;
+  mentionState.query = query;
+  pop.classList.remove('hidden');
+  pop.innerHTML = items
+    .slice(0, 8)
+    .map((item, i) => `
+      <button type="button" class="mention-item ${i === 0 ? 'active' : ''}" data-mention-index="${i}" data-mention-id="${escapeAttr(item.id)}">
+        ${item.avatar ? `<img class="mention-avatar" src="${escapeAttr(mxcToUrl(item.avatar, 48, 48, 'crop'))}" alt="" />` : avatarHtml(item.name || item.id, item.avatar, 'avatar-36').replace('class="avatar avatar-36"', 'class="avatar avatar-36 mention-avatar"')}
+        <span class="mention-name">${escapeHtml(item.name || item.id)}</span>
+        <span class="mention-id">${escapeHtml(item.id)}</span>
+      </button>`)
+    .join('');
+}
+
+function closeMentionPop() {
+  const pop = $('#mention-pop');
+  mentionState.open = false;
+  pop?.classList.add('hidden');
+}
+
+function mentionCaretContext(input) {
+  const caret = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, caret);
+  const match = before.match(/(^|[\s(])@([^\s]*)$/);
+  if (!match) return null;
+  return { tokenStart: caret - match[0].length + match[1].length, query: match[2] };
+}
+
+const scheduleMentions = debounce(() => {
+  const input = $('#message-input');
+  if (!input || !state.currentRoomId) {
+    closeMentionPop();
+    return;
+  }
+  const ctx = mentionCaretContext(input);
+  if (!ctx) {
+    closeMentionPop();
+    return;
+  }
+  const room = getCurrentRoom();
+  const local = mentionLocalCandidates(room);
+  const q = ctx.query.toLowerCase();
+  const filtered = local.filter((m) => !q || `${m.name} ${m.id}`.toLowerCase().includes(q));
+  openMentionPop(filtered, ctx.tokenStart, ctx.query);
+
+  // Remote directory for longer queries when local results are few
+  if (!state.demo && state.client && q.length >= 2 && filtered.length < 5) {
+    state.client
+      .searchUserDirectory({ term: q, limit: 8 })
+      .then((res) => {
+        if (!mentionState.open || mentionState.query !== ctx.query) return;
+        const extra = (res.results || [])
+          .filter((u) => u.user_id !== state.userId && !filtered.some((m) => m.id === u.user_id))
+          .map((u) => ({ id: u.user_id, name: u.display_name || u.user_id, avatar: u.avatar_url || null }));
+        const merged = [...filtered, ...extra].slice(0, 8);
+        openMentionPop(merged, ctx.tokenStart, ctx.query);
+      })
+      .catch(() => {});
+  }
+}, 160);
+
+function moveMention(delta) {
+  if (!mentionState.open || !mentionState.items.length) return;
+  mentionState.index = (mentionState.index + delta + mentionState.items.length) % mentionState.items.length;
+  $$('#mention-pop .mention-item').forEach((el, i) => el.classList.toggle('active', i === mentionState.index));
+  $('#mention-pop .mention-item.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function selectMention(id) {
+  const input = $('#message-input');
+  if (!input) return;
+  const caret = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, mentionState.tokenStart);
+  const after = input.value.slice(caret);
+  input.value = `${before}${id} ${after}`;
+  const pos = before.length + id.length + 1;
+  input.selectionStart = input.selectionEnd = pos;
+  closeMentionPop();
+  input.focus();
+  resizeComposer();
+  sendTypingState();
+}
+
+function initMentionPop() {
+  const wrap = $('.composer-wrap');
+  if (!wrap || $('#mention-pop')) return;
+  const pop = document.createElement('div');
+  pop.className = 'mention-pop hidden';
+  pop.id = 'mention-pop';
+  const composer = wrap.querySelector('.composer');
+  (composer || wrap).appendChild(pop);
+  pop.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('[data-mention-id]');
+    if (item) {
+      e.preventDefault();
+      selectMention(item.dataset.mentionId);
+    }
+  });
+  pop.addEventListener('mouseenter', (e) => {
+    const item = e.target.closest('[data-mention-index]');
+    if (item) {
+      mentionState.index = Number(item.dataset.mentionIndex);
+      $$('#mention-pop .mention-item').forEach((el, i) => el.classList.toggle('active', i === mentionState.index));
+    }
+  });
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -2830,6 +3114,17 @@ function bindEvents() {
 
   $('#logout-btn').addEventListener('click', logout);
   $('#logout-btn-2').addEventListener('click', logout);
+  $('#pinned-label').addEventListener('click', openPinnedModal);
+  $('#pinned-body').addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-pinned-remove]');
+    if (remove) {
+      togglePin({ id: remove.dataset.pinnedRemove });
+      openPinnedModal();
+      return;
+    }
+    const jump = e.target.closest('[data-pinned-jump]');
+    if (jump) jumpToBookmark(jump.dataset.pinnedJump, state.currentRoomId);
+  });
   $('#palette-btn').addEventListener('click', openCommandPalette);
   $('#bookmarks-btn').addEventListener('click', openBookmarks);
   $('#focus-btn').addEventListener('click', toggleFocusMode);
@@ -2911,6 +3206,7 @@ function bindEvents() {
   $('#message-input').addEventListener('input', () => {
     resizeComposer();
     sendTypingState();
+    scheduleMentions();
     if (state.currentRoomId) {
       const value = $('#message-input').value;
       if (value.trim()) state.drafts[state.currentRoomId] = value;
@@ -2920,11 +3216,117 @@ function bindEvents() {
     }
   });
   $('#message-input').addEventListener('keydown', (e) => {
+    if (mentionState.open) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveMention(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); moveMention(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const item = mentionState.items[mentionState.index];
+        if (item) selectMention(item.id);
+        return;
+      }
+      if (e.key === 'Escape') { closeMentionPop(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
+  function applyMd(action) {
+    const ta = $('#message-input');
+    if (!ta) return;
+    const value = ta.value;
+    const start = ta.selectionStart ?? value.length;
+    const end = ta.selectionEnd ?? value.length;
+    let sel = value.slice(start, end);
+    let rep = '';
+    let selStart = start;
+    let selLen = 0;
+    const placeholder = 'текст';
+    const inner = sel || placeholder;
+
+    switch (action) {
+      case 'bold':
+        rep = `**${inner}**`;
+        selLen = inner.length;
+        break;
+      case 'italic':
+        rep = `*${inner}*`;
+        selLen = inner.length;
+        break;
+      case 'strike':
+        rep = `~~${inner}~~`;
+        selLen = inner.length;
+        break;
+      case 'code':
+        if (sel.includes('\n')) {
+          rep = '```\n' + sel + '\n```';
+          selLen = rep.length;
+        } else {
+          rep = `\`${inner}\``;
+          selLen = inner.length;
+        }
+        break;
+      case 'quote': {
+        const lines = sel.split('\n').map((line) => `> ${line}`).join('\n');
+        rep = lines;
+        selLen = lines.length;
+        break;
+      }
+      case 'list': {
+        const lines = sel.split('\n').map((line) => `- ${line}`).join('\n');
+        rep = lines;
+        selLen = lines.length;
+        break;
+      }
+      case 'link': {
+        const url = 'https://';
+        rep = `[${inner}](${url})`;
+        selStart = start + `[${inner}](`.length;
+        selLen = url.length;
+        break;
+      }
+      default:
+        return;
+    }
+
+    ta.value = value.slice(0, start) + rep + value.slice(end);
+    if (!sel) {
+      const offset = rep.indexOf(placeholder);
+      if (offset !== -1 && action !== 'link') {
+        selStart = start + offset;
+        selLen = placeholder.length;
+      } else {
+        selStart = start + rep.length;
+        selLen = 0;
+      }
+    }
+    ta.selectionStart = selStart;
+    ta.selectionEnd = selStart + selLen;
+    ta.focus();
+    resizeComposer();
+    sendTypingState();
+    if (state.currentRoomId) {
+      const v = ta.value;
+      if (v.trim()) state.drafts[state.currentRoomId] = v;
+      else delete state.drafts[state.currentRoomId];
+      clearTimeout(state.draftTimer);
+      state.draftTimer = setTimeout(saveDrafts, 400);
+    }
+  }
+
+  $('#md-toolbar').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-md]');
+    if (btn) applyMd(btn.dataset.md);
+  });
+
+  $('#message-input').addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 'i')) {
+      e.preventDefault();
+      applyMd(e.key.toLowerCase() === 'b' ? 'bold' : 'italic');
+    }
+  });
+
   $('#send-btn').addEventListener('click', sendMessage);
 
   $('#voice-btn').addEventListener('click', toggleVoiceRecording);
@@ -3032,7 +3434,7 @@ function bindEvents() {
     const actionBtn = e.target.closest('[data-action]');
     if (!actionBtn) return;
     const action = actionBtn.dataset.action;
-    if (['reply', 'react', 'edit', 'delete', 'copy', 'bookmark'].includes(action)) {
+    if (['reply', 'react', 'edit', 'delete', 'copy', 'bookmark', 'pin'].includes(action)) {
       handleMessageAction(action, actionBtn.dataset.event, actionBtn);
     }
   });
@@ -3241,6 +3643,8 @@ async function init() {
     filePreview.className = 'file-preview';
     filePreview.id = 'file-preview';
     composerWrap.insertBefore(filePreview, composerWrap.querySelector('.composer'));
+
+    initMentionPop();
 
     const voiceBar = document.createElement('div');
     voiceBar.className = 'voice-recording hidden';
