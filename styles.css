@@ -1,10 +1,10 @@
-/* Basic layout and overrides */
-body { margin: 20px; font-family: Arial, sans-serif; }
-#messages { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; background:#fafafa; }
-.messageBox div { margin-bottom: 8px; }
-.messageBox .own { background:#e0ffe0; padding:4px; border-radius:4px; }
-.messageBox .other { background:#fff; padding:4px; border-radius:4px; }
-.messageBox .meta { font-size:0.8em; color:#555; }
-.inputArea textarea { width:100%; }
-.inputArea button { margin-top:5px; }
-#typing { height:1.2em; }
+/* Enhanced styling for modern Bootstrap UI */
+body { background:#eef2f5; }
+#messages { max-height:400px; }
+.message { margin-bottom:0.5rem; }
+.message .meta { font-size:0.8rem; color:#6c757d; }
+.message .content { padding:0.5rem; border-radius:0.3rem; }
+.message.own .content { background:#d1e7dd; }
+.message.other .content { background:#fff; }
+.message .actions button { background:none; border:none; color:#0d6efd; margin-left:0.3rem; }
+.message .actions button:hover { color:#0a58ca; }
