@@ -7,8 +7,10 @@
     <meta name="description" content="mst.matrix — a modern, fast Matrix web client." />
     <title>mst.matrix — Matrix, beautifully</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237c5cff'/%3E%3Ccircle cx='20' cy='32' r='6' fill='white'/%3E%3Ccircle cx='32' cy='32' r='6' fill='white' opacity='.7'/%3E%3Ccircle cx='44' cy='32' r='6' fill='white' opacity='.4'/%3E%3C/svg%3E" />
-    <script type="module" crossorigin src="./assets/index-DbyzviqF.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-D9nEjCNH.css">
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <script type="module" crossorigin src="./assets/index-BL_UuN04.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-D6mRFrQv.css">
   </head>
   <body>
     <div id="app">
@@ -106,6 +108,11 @@
             <kbd>⌘K</kbd>
           </div>
 
+          <div class="spaces-block hidden" id="spaces-block">
+            <div class="room-list-head"><span>Пространства</span></div>
+            <nav class="space-list" id="space-list"></nav>
+          </div>
+
           <div class="invites-block hidden" id="invites-block">
             <div class="room-list-head"><span>Приглашения</span><span class="room-count" id="invite-count">0</span></div>
             <nav class="invite-list" id="invite-list"></nav>
@@ -196,6 +203,7 @@
                 <button type="button" class="md-btn" data-md="link" title="Ссылка" data-icon="link"></button>
                 <button type="button" class="md-btn" data-md="quote" title="Цитата" data-icon="quote"></button>
                 <button type="button" class="md-btn" data-md="list" title="Список" data-icon="list"></button>
+                <button type="button" class="md-btn" id="poll-btn" title="Опрос" data-icon="poll"></button>
               </div>
               <div class="composer">
                 <button class="icon-btn" id="attach-btn" title="Прикрепить файл" data-icon="paperclip"></button>
@@ -408,6 +416,54 @@
             <button data-stab="people">Люди</button>
           </div>
           <div id="search-results" class="search-results"></div>
+        </div>
+      </div>
+
+      <!-- Space -->
+      <div class="modal" id="space-modal" role="dialog" aria-modal="true" aria-labelledby="space-title">
+        <header class="modal-head">
+          <h3 id="space-title">Пространство</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="space-body"></div>
+      </div>
+
+      <!-- Thread -->
+      <div class="modal" id="thread-modal" role="dialog" aria-modal="true" aria-labelledby="thread-title">
+        <header class="modal-head">
+          <h3 id="thread-title">Ветка</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body thread-body-wrap">
+          <div id="thread-body" class="thread-body"></div>
+          <div class="thread-composer">
+            <input id="thread-input" type="text" placeholder="Ответить в ветке…" />
+            <button class="btn btn-primary btn-sm" id="thread-send" data-icon="send">Отправить</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Poll -->
+      <div class="modal modal-sm" id="poll-modal" role="dialog" aria-modal="true" aria-labelledby="poll-title">
+        <header class="modal-head">
+          <h3 id="poll-title">Новый опрос</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <div class="field">
+            <label for="poll-question">Вопрос</label>
+            <div class="input-wrap"><input id="poll-question" type="text" placeholder="Что выберем?" /></div>
+          </div>
+          <div class="field"><div class="input-wrap"><input id="poll-opt-1" type="text" placeholder="Вариант 1" /></div></div>
+          <div class="field"><div class="input-wrap"><input id="poll-opt-2" type="text" placeholder="Вариант 2" /></div></div>
+          <div class="field"><div class="input-wrap"><input id="poll-opt-3" type="text" placeholder="Вариант 3 (необязательно)" /></div></div>
+          <div class="field"><div class="input-wrap"><input id="poll-opt-4" type="text" placeholder="Вариант 4 (необязательно)" /></div></div>
+          <label class="switch-row compact">
+            <span><strong>Несколько ответов</strong><small>Разрешить выбирать несколько вариантов</small></span>
+            <input type="checkbox" id="poll-multi" class="switch" />
+          </label>
+          <p class="form-error" id="poll-error"></p>
+          <button class="btn btn-primary btn-block" id="poll-submit">Создать опрос</button>
         </div>
       </div>
 

@@ -35,6 +35,7 @@ const state = {
   typing: {},
   demo: false,
   demoRooms: [],
+  demoSpaces: [],
   demoRoomId: null,
   readReceiptTimers: {},
   messageContent: new Map(),
@@ -605,7 +606,7 @@ function attachClient(client) {
       return;
     }
 
-    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction' || type === 'm.sticker') {
+    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction' || type === 'm.sticker' || type === 'm.poll.start' || type === 'm.poll.response' || type === 'm.poll.end') {
       if (type === 'm.room.message' || type === 'm.room.encrypted') watchEventUpdates(event, room);
       if (room.roomId === state.currentRoomId && !toStartOfTimeline) {
         scheduleMessages(false);
@@ -755,6 +756,7 @@ function renderRooms() {
   const list = $('#room-list');
   if (!list) return;
 
+  renderSpaces();
   renderInvites();
 
   let rooms;
@@ -919,13 +921,16 @@ function buildTimeline(room) {
       sender: m.sender,
       senderName: m.name,
       ts: m.ts,
-      msgtype: m.msgtype || 'm.text',
+      msgtype: m.msgtype || (m.content?.['m.poll'] ? 'm.poll' : 'm.text'),
       body: m.body,
       content: m.content || { msgtype: m.msgtype || 'm.text', body: m.body },
       own: !!m.isOwn,
       redacted: false,
       edited: !!m.edited,
       reactions: m.reactions || {},
+      poll: m.poll
+        ? { responses: m.pollResponses || [], ended: !!m.pollEnded }
+        : undefined,
       encrypted: false,
     }));
     const demoById = new Map(demoMessages.map((m) => [m.id, m]));
@@ -946,9 +951,29 @@ function buildTimeline(room) {
   const events = room.timeline || [];
   const edits = new Map();
   const reactionMap = new Map(); // targetId -> Map<key, {count, mine, eventId}>
+  const pollResponses = new Map(); // targetId -> {sender, selections, eventId}[]
+  const pollEnded = new Set();
 
   for (const ev of events) {
     const type = ev.getType();
+    if (type === 'm.poll.response') {
+      const rel = ev.getContent()?.['m.relates_to'];
+      const target = rel?.event_id;
+      if (target) {
+        if (!pollResponses.has(target)) pollResponses.set(target, []);
+        pollResponses.get(target).push({
+          sender: ev.getSender(),
+          selections: ev.getContent()?.['m.selections'] || ev.getContent()?.['org.matrix.msc3381.v2.selections'] || [],
+          eventId: ev.getId(),
+        });
+      }
+      continue;
+    }
+    if (type === 'm.poll.end') {
+      const rel = ev.getContent()?.['m.relates_to'];
+      if (rel?.event_id) pollEnded.add(rel.event_id);
+      continue;
+    }
     if (type === 'm.room.message') {
       const rel = ev.getContent()?.['m.relates_to'];
       if (rel?.rel_type === 'm.replace' && rel.event_id) {
@@ -975,7 +1000,7 @@ function buildTimeline(room) {
   const messages = [];
   for (const ev of events) {
     const type = ev.getType();
-    if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.sticker') continue;
+    if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.sticker' && type !== 'm.poll.start') continue;
     const content = ev.getContent() || {};
     const rel = content['m.relates_to'];
     if (rel?.rel_type === 'm.replace') continue;
@@ -997,7 +1022,7 @@ function buildTimeline(room) {
       sender: ev.getSender(),
       senderName: member?.name || ev.getSender(),
       ts: ev.getTs(),
-      msgtype: finalContent.msgtype || (type === 'm.sticker' ? 'm.sticker' : type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
+      msgtype: finalContent.msgtype || (type === 'm.poll.start' ? 'm.poll' : type === 'm.sticker' ? 'm.sticker' : type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
       body: finalContent.body || '',
       content: finalContent,
       own: ev.getSender() === state.userId,
@@ -1005,6 +1030,9 @@ function buildTimeline(room) {
       edited: !!edit,
       reactions: reactionObj,
       threadRoot: rel?.rel_type === 'm.thread' ? rel.event_id : null,
+      poll: type === 'm.poll.start'
+        ? { responses: pollResponses.get(ev.getId()) || [], ended: pollEnded.has(ev.getId()) }
+        : undefined,
       encrypted: type === 'm.room.encrypted',
       decryptionFailure: type === 'm.room.encrypted' && (ev.isDecryptionFailure?.() ?? true),
     });
@@ -1083,6 +1111,49 @@ function audioPlayerHtml(msg) {
   </div>`;
 }
 
+function pollHtml(msg) {
+  const c = msg.content || {};
+  const poll = c['m.poll'] || {};
+  const answers = poll.answers || [];
+  const responses = msg.poll?.responses || [];
+  const ended = msg.poll?.ended || !!c['org.matrix.msc3381.poll.end'];
+  const myVote = responses.find((r) => r.sender === state.userId);
+  const mySelections = new Set(myVote?.selections || []);
+  const counts = new Map();
+  let total = 0;
+  for (const r of responses) {
+    const unique = new Set(r.selections || []);
+    for (const sel of unique) {
+      counts.set(sel, (counts.get(sel) || 0) + 1);
+      total += 1;
+    }
+  }
+  const winner = Math.max(...([...counts.values(), 0]));
+  return `
+    <div class="poll">
+      <div class="poll-question">${escapeHtml(poll.question || 'Опрос')}</div>
+      <div class="poll-options">
+        ${answers.map((a) => {
+          const id = a.id;
+          const count = counts.get(id) || 0;
+          const pct = total ? Math.round((count / total) * 100) : 0;
+          const chosen = mySelections.has(id);
+          const leading = count === winner && total > 0;
+          return `
+            <button type="button" class="poll-option ${chosen ? 'chosen' : ''} ${leading ? 'leading' : ''}" data-poll-vote="${escapeAttr(msg.id)}" data-answer="${escapeAttr(id)}" ${ended ? 'disabled' : ''}>
+              <span class="poll-bar" style="width:${ended || chosen || myVote ? pct : 0}%"></span>
+              <span class="poll-text">${escapeHtml(a['org.matrix.msc1767.text'] || a.text || id)}</span>
+              <span class="poll-count">${count} · ${pct}%</span>
+            </button>`;
+        }).join('')}
+      </div>
+      <div class="poll-foot">
+        <span>${total} голосов</span>
+        ${ended ? '<span class="poll-ended">Завершён</span>' : msg.own ? `<button type="button" class="poll-end-btn" data-poll-end="${escapeAttr(msg.id)}">Завершить опрос</button>` : ''}
+      </div>
+    </div>`;
+}
+
 function messageBodyHtml(msg) {
   if (msg.redacted) return '<span class="msg-redacted">Сообщение удалено</span>';
   if (msg.encrypted && msg.decryptionFailure) {
@@ -1119,6 +1190,7 @@ function messageBodyHtml(msg) {
     return mediaPlaceholder('video', msg.id, 'Видео недоступно');
   }
 
+  if (msg.msgtype === 'm.poll') return pollHtml(msg);
   if (msg.msgtype === 'm.emote') {
     return `<em>* ${escapeHtml(msg.senderName)} ${formatText(msg.body)}</em>`;
   }
@@ -1145,27 +1217,35 @@ function readReceiptHtml(msg) {
   return `<span class="read-mark" title="Отправлено">${icon('check')}</span>`;
 }
 
-function messageHtml(msg, grouped) {
+function hasThread(eventId) {
+  if (!eventId || state.demo) return false;
+  return (getCurrentRoom()?.getThread?.(eventId)?.length || 0) > 0;
+}
+
+function messageHtml(msg, grouped, opts = {}) {
   const own = msg.own;
   const name = own ? 'Вы' : msg.senderName || msg.sender;
   const saved = isBookmarked(msg.id);
-  const tools = `
+  const withTools = opts.withTools !== false;
+  const threadTarget = msg.threadRoot || (hasThread(msg.id) ? msg.id : null);
+  const tools = withTools ? `
     <div class="msg-tools">
       <button class="icon-btn" data-action="reply" data-event="${escapeAttr(msg.id)}" title="Ответить">${icon('reply')}</button>
       <button class="icon-btn" data-action="react" data-event="${escapeAttr(msg.id)}" title="Реакция">${icon('smile')}</button>
+      ${threadTarget ? `<button class="icon-btn" data-action="thread" data-event="${escapeAttr(threadTarget)}" title="Ветка">${icon('messages')}</button>` : ''}
       <button class="icon-btn ${saved ? 'is-saved' : ''}" data-action="bookmark" data-event="${escapeAttr(msg.id)}" title="${saved ? 'Убрать из сохранённых' : 'Сохранить'}">${icon(saved ? 'bookmark-filled' : 'bookmark')}</button>
       ${canPin(getCurrentRoom()) && !msg.redacted ? `<button class="icon-btn ${isPinned(msg.id) ? 'is-saved' : ''}" data-action="pin" data-event="${escapeAttr(msg.id)}" title="${isPinned(msg.id) ? 'Открепить' : 'Закрепить'}">${icon('pin')}</button>` : ''}
       ${own ? `<button class="icon-btn" data-action="edit" data-event="${escapeAttr(msg.id)}" title="Изменить">${icon('edit')}</button>` : ''}
       ${own ? `<button class="icon-btn" data-action="delete" data-event="${escapeAttr(msg.id)}" title="Удалить">${icon('trash')}</button>` : ''}
       <button class="icon-btn" data-action="copy" data-event="${escapeAttr(msg.id)}" title="Копировать">${icon('copy')}</button>
-    </div>`;
+    </div>` : '';
 
   return `<div class="msg ${own ? 'own' : ''} ${grouped ? 'grouped' : ''}" data-event-id="${escapeAttr(msg.id)}">
     <div class="msg-avatar" data-user-id="${escapeAttr(msg.sender)}" title="Профиль">${avatarHtml(msg.senderName || msg.sender)}</div>
     <div class="msg-main">
       <div class="msg-head">
         <span class="msg-sender" data-user-id="${escapeAttr(msg.sender)}" role="button" tabindex="0">${escapeHtml(name)}</span>
-        ${msg.threadRoot ? '<span class="thread-tag">ветка</span>' : ''}
+        ${msg.threadRoot ? `<button type="button" class="thread-tag" data-action="thread" data-event="${escapeAttr(msg.threadRoot)}">ветка</button>` : ''}
         <span class="msg-time">${formatTime(msg.ts)}${msg.edited ? ' · изм.' : ''}</span>
         ${readReceiptHtml(msg)}
       </div>
@@ -2082,6 +2162,67 @@ function jumpToBookmark(id, roomId) {
   }, 380);
 }
 
+function threadEventToMessage(ev, room) {
+  const c = ev.getContent?.() || {};
+  return {
+    id: ev.getId(),
+    sender: ev.getSender(),
+    senderName: room?.getMember?.(ev.getSender())?.name || ev.getSender(),
+    ts: ev.getTs(),
+    msgtype: c.msgtype || 'm.text',
+    body: c.body || '',
+    content: c,
+    own: ev.getSender() === state.userId,
+    redacted: !!ev.isRedacted?.(),
+    edited: false,
+    reactions: {},
+    encrypted: false,
+    decryptionFailure: false,
+  };
+}
+
+function openThreadModal(rootEventId) {
+  const room = getCurrentRoom();
+  if (!room || !rootEventId || state.demo) return;
+  const thread = room.getThread?.(rootEventId);
+  if (!thread) {
+    toast('Ветка недоступна', 'info');
+    return;
+  }
+  const body = $('#thread-body');
+  if (!body) return;
+  const rootMsg = thread.rootEvent ? threadEventToMessage(thread.rootEvent, room) : null;
+  const replies = (thread.events || [])
+    .filter((ev) => ev.getId() !== rootEventId && (ev.getType() === 'm.room.message' || ev.getType() === 'm.room.encrypted'))
+    .map((ev) => threadEventToMessage(ev, room));
+  body.innerHTML = [
+    rootMsg ? messageHtml(rootMsg, false, { withTools: false }) : '',
+    ...replies.map((m) => messageHtml(m, false, { withTools: false })),
+  ].join('');
+  $('#thread-input').value = '';
+  $('#thread-input').dataset.threadRoot = rootEventId;
+  openModal('thread-modal');
+  setTimeout(() => $('#thread-input')?.focus(), 60);
+}
+
+async function sendThreadReply() {
+  const input = $('#thread-input');
+  const rootId = input?.dataset.threadRoot;
+  const text = input?.value.trim();
+  if (!rootId || !text || !state.currentRoomId) return;
+  try {
+    await state.client.sendEvent(state.currentRoomId, rootId, 'm.room.message', {
+      msgtype: 'm.text',
+      body: text,
+      'm.relates_to': { rel_type: 'm.thread', event_id: rootId },
+    });
+    input.value = '';
+    openThreadModal(rootId);
+  } catch (err) {
+    toast(err?.message || 'Не удалось отправить ответ в ветку', 'error');
+  }
+}
+
 function openPrompt(title, label, value = '', confirmText = 'Сохранить', multiline = false) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
@@ -2193,6 +2334,11 @@ async function handleMessageAction(action, eventId, el) {
     return;
   }
 
+  if (action === 'thread') {
+    openThreadModal(eventId);
+    return;
+  }
+
   if (action === 'edit') {
     if (!msg.own) return;
     const newText = await openPrompt('Изменить сообщение', 'Новый текст', msg.body, 'Сохранить', true);
@@ -2240,6 +2386,127 @@ async function handleMessageAction(action, eventId, el) {
       toast('Не удалось удалить сообщение', 'error');
     }
   }
+}
+
+async function votePoll(startEventId, answerId) {
+  if (!startEventId || !answerId) return;
+  if (state.demo) {
+    const room = getCurrentRoom();
+    const msg = room?.messages?.find((m) => m.id === startEventId);
+    if (!msg) return;
+    const list = msg.pollResponses || [];
+    const mine = list.find((r) => r.sender === '@you:matrix.org');
+    if (mine) mine.selections = [answerId];
+    else list.push({ sender: '@you:matrix.org', selections: [answerId] });
+    msg.pollResponses = list;
+    renderMessages(false);
+    return;
+  }
+  try {
+    await state.client.sendEvent(state.currentRoomId, 'm.poll.response', {
+      'm.relates_to': { rel_type: 'm.reference', event_id: startEventId },
+      'm.selections': [answerId],
+    });
+    renderMessages(false);
+  } catch (err) {
+    toast(err?.message || 'Не удалось проголосовать', 'error');
+  }
+}
+
+async function endPoll(startEventId) {
+  if (!startEventId) return;
+  if (state.demo) {
+    const room = getCurrentRoom();
+    const msg = room?.messages?.find((m) => m.id === startEventId);
+    if (msg) msg.pollEnded = true;
+    renderMessages(false);
+    return;
+  }
+  const ok = await confirmDialog('Завершить опрос?', 'После завершения голосовать будет нельзя.', 'Завершить');
+  if (!ok) return;
+  try {
+    await state.client.sendEvent(state.currentRoomId, 'm.poll.end', {
+      'm.relates_to': { rel_type: 'm.reference', event_id: startEventId },
+      'org.matrix.msc3381.poll.end': {},
+    });
+    renderMessages(false);
+  } catch (err) {
+    toast(err?.message || 'Не удалось завершить опрос', 'error');
+  }
+}
+
+async function createPoll() {
+  const question = $('#poll-question').value.trim();
+  const options = [
+    $('#poll-opt-1').value.trim(),
+    $('#poll-opt-2').value.trim(),
+    $('#poll-opt-3').value.trim(),
+    $('#poll-opt-4').value.trim(),
+  ].filter(Boolean);
+  const multi = $('#poll-multi').checked;
+  const error = $('#poll-error');
+  error.textContent = '';
+  if (!question) {
+    error.textContent = 'Введите вопрос опроса.';
+    return;
+  }
+  if (options.length < 2) {
+    error.textContent = 'Нужно минимум два варианта ответа.';
+    return;
+  }
+  const answers = options.map((text, i) => ({
+    id: String.fromCharCode(65 + i),
+    'org.matrix.msc1767.text': text,
+  }));
+  const pollContent = {
+    'm.poll': {
+      question,
+      kind: 'org.matrix.msc3381.poll.disclosed',
+      max_selections: multi ? options.length : 1,
+      answers,
+    },
+    'org.matrix.msc3381.poll.start': {},
+  };
+
+  if (state.demo) {
+    const room = getCurrentRoom();
+    room.messages.push({
+      id: `demo-poll-${Date.now()}`,
+      sender: '@you:matrix.org',
+      name: state.profile.displayName || 'Вы',
+      ts: Date.now(),
+      body: question,
+      msgtype: 'm.poll',
+      isOwn: true,
+      reactions: {},
+      poll: true,
+      pollResponses: [],
+      content: pollContent,
+    });
+    closeModals();
+    renderMessages(true);
+    renderRooms();
+    return;
+  }
+
+  try {
+    await state.client.sendEvent(state.currentRoomId, 'm.poll.start', pollContent);
+    closeModals();
+    renderMessages(true);
+  } catch (err) {
+    error.textContent = err?.message || 'Не удалось создать опрос';
+  }
+}
+
+function openPollModal() {
+  ['#poll-question', '#poll-opt-1', '#poll-opt-2', '#poll-opt-3', '#poll-opt-4'].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.value = '';
+  });
+  $('#poll-multi').checked = false;
+  $('#poll-error').textContent = '';
+  openModal('poll-modal');
+  setTimeout(() => $('#poll-question')?.focus(), 60);
 }
 
 async function toggleReaction(key, targetId, reactionEventId) {
@@ -2347,6 +2614,10 @@ function mentionLocalCandidates(room) {
 function openMentionPop(items, tokenStart, query) {
   const pop = $('#mention-pop');
   if (!pop) return;
+  if (!items.length) {
+    closeMentionPop();
+    return;
+  }
   mentionState.open = true;
   mentionState.items = items;
   mentionState.index = 0;
@@ -2581,6 +2852,73 @@ async function joinRoom() {
 /* ════════════════════════════════════════════════════════════
    Invites, directory, global search, room settings, user profile
    ════════════════════════════════════════════════════════════ */
+function joinedSpaces() {
+  if (state.demo) return state.demoSpaces || [];
+  return (state.client?.getRooms() || []).filter((room) => room.isSpaceRoom?.());
+}
+
+function renderSpaces() {
+  const block = $('#spaces-block');
+  const list = $('#space-list');
+  if (!block || !list) return;
+  const spaces = joinedSpaces();
+  block.classList.toggle('hidden', spaces.length === 0);
+  if (!spaces.length) {
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = spaces.map((space) => {
+    const name = state.demo ? space.name : roomName(space);
+    const avatar = state.demo ? avatarHtml(name) : avatarHtml(name, roomAvatarMxc(space));
+    return `<button class="space-item" data-space-id="${escapeAttr(state.demo ? space.id : space.roomId)}">${avatar}<span>${escapeHtml(name)}</span></button>`;
+  }).join('');
+}
+
+function renderSpaceHierarchy(spaceId) {
+  const body = $('#space-body');
+  if (!body) return;
+  if (state.demo) {
+    const space = state.demoSpaces.find((x) => x.id === spaceId);
+    const children = space?.children || [];
+    body.innerHTML = children.map((child) => `
+      <div class="directory-room">
+        ${avatarHtml(child.name)}
+        <div class="directory-main"><strong>${escapeHtml(child.name)}</strong><small>${escapeHtml(child.topic || 'Комната пространства')}</small></div>
+        <button class="btn btn-primary btn-sm" data-space-join="${escapeAttr(child.id)}">${state.demoRooms.some((r) => r.id === child.id) ? 'Открыть' : 'Войти'}</button>
+      </div>`).join('') || '<div class="bookmark-empty">В пространстве пока нет комнат</div>';
+    return;
+  }
+  const room = state.client.getRoom(spaceId);
+  $('#space-title').textContent = roomName(room);
+  body.innerHTML = `<div class="bookmark-empty">${icon('loader')}<p style="margin-top:8px;">Загружаем…</p></div>`;
+  state.client.getRoomHierarchy(spaceId, 50, 1)
+    .then((res) => {
+      const rooms = (res.rooms || []).filter((r) => r.room_id !== spaceId);
+      if (!rooms.length) {
+        body.innerHTML = '<div class="bookmark-empty">В пространстве пока нет комнат</div>';
+        return;
+      }
+      body.innerHTML = rooms.map((r) => {
+        const joined = !!state.client.getRoom(r.room_id);
+        return `
+          <div class="directory-room">
+            ${avatarHtml(r.name || r.canonical_alias || r.room_id, r.avatar_url || null)}
+            <div class="directory-main"><strong>${escapeHtml(r.name || r.canonical_alias || r.room_id)}</strong><small>${escapeHtml((r.topic || '').slice(0, 90))} · ${r.num_joined_members || 0} участников</small></div>
+            <button class="btn btn-primary btn-sm" data-space-join="${escapeAttr(r.room_id)}">${joined ? 'Открыть' : 'Войти'}</button>
+          </div>`;
+      }).join('');
+    })
+    .catch((err) => {
+      body.innerHTML = `<div class="bookmark-empty">${escapeHtml(err?.message || 'Не удалось загрузить пространство')}</div>`;
+    });
+}
+
+function openSpace(spaceId) {
+  $('#space-title').textContent = 'Пространство';
+  renderSpaceHierarchy(spaceId);
+  openModal('space-modal');
+}
+
 function invitedRooms() {
   if (state.demo) return [];
   return clientRooms().filter((room) => room.getMyMembership?.() === 'invite');
@@ -2831,6 +3169,54 @@ function canEditRoom(room) {
   );
 }
 
+function roomNotifLevel(roomId) {
+  if (state.demo) return state.demoNotif?.[roomId] || 'all';
+  try {
+    const rule = state.client?.getRoomPushRule?.('global', roomId);
+    if (!rule) return 'all';
+    const actions = rule.actions || [];
+    if (actions.includes('dont_notify')) return 'mute';
+    const highlight = actions.find((a) => a && typeof a === 'object' && a.set_tweak === 'highlight');
+    if (highlight && highlight.value === false) return 'mention';
+    return 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+async function setRoomNotifLevel(level) {
+  const roomId = state.currentRoomId;
+  if (!roomId) return;
+  if (state.demo) {
+    state.demoNotif = state.demoNotif || {};
+    state.demoNotif[roomId] = level;
+    toast(`Уведомления: ${level === 'all' ? 'все' : level === 'mention' ? 'упоминания' : 'выключены'} (демо)`, 'success', 1800);
+    updateNotifSeg();
+    return;
+  }
+  const ruleId = '!' + roomId;
+  try {
+    if (level === 'all') {
+      if (state.client.getRoomPushRule?.('global', roomId)) {
+        await state.client.deletePushRule('global', 'room', ruleId);
+      }
+    } else if (level === 'mute') {
+      await state.client.addPushRule('global', 'room', ruleId, { actions: ['dont_notify'] });
+    } else if (level === 'mention') {
+      await state.client.addPushRule('global', 'room', ruleId, { actions: ['notify', { set_tweak: 'highlight', value: false }] });
+    }
+    toast('Настройки уведомлений обновлены', 'success');
+    updateNotifSeg();
+  } catch (err) {
+    toast(err?.message || 'Не удалось обновить уведомления', 'error');
+  }
+}
+
+function updateNotifSeg() {
+  const level = roomNotifLevel(state.currentRoomId);
+  $$('#room-notif-seg [data-notif]').forEach((b) => b.classList.toggle('active', b.dataset.notif === level));
+}
+
 function openRoomSettings() {
   const room = getCurrentRoom();
   if (!room) return;
@@ -3058,6 +3444,12 @@ function openRoomInfo() {
       </div>
       <div class="member-list">${room.members.map((m) => `
         <div class="member-row" data-member="${escapeAttr(m.id)}" role="button" tabindex="0">${avatarHtml(m.name)}<span>${escapeHtml(m.name)}</span><small>${m.power >= 100 ? 'Админ' : ''}</small></div>`).join('')}</div>
+      <div class="settings-label">Уведомления</div>
+      <div class="segmented" id="room-notif-seg" role="group" aria-label="Уведомления">
+        <button data-notif="all" class="active">Все</button>
+        <button data-notif="mention">Упоминания</button>
+        <button data-notif="mute">Выкл</button>
+      </div>
       <div class="settings-label">Пригласить пользователя</div>
       <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
       ${canEditRoom(room) ? `<button class="btn btn-soft btn-block" style="margin-top:16px;" id="open-room-settings">${icon('settings')} Настройки комнаты</button>` : ''}
@@ -3080,7 +3472,13 @@ function openRoomInfo() {
         <div class="info-row">${icon('hash')}<span>${escapeHtml(room.roomId)}</span></div>
         <div class="info-row">${icon('users')}<span>${members.length} участников</span></div>
       </div>
-      <div class="settings-label">Участники</div>
+      <div class="settings-label">Участники</div>      <div class="settings-label">Уведомления</div>
+      <div class="segmented" id="room-notif-seg" role="group" aria-label="Уведомления">
+        <button data-notif="all" class="active">Все</button>
+        <button data-notif="mention">Упоминания</button>
+        <button data-notif="mute">Выкл</button>
+      </div>
+
       <div class="member-list">
         ${members.slice(0, 80).map((m) => `
           <div class="member-row" data-member="${escapeAttr(m.userId)}" role="button" tabindex="0">${avatarHtml(m.name, m.getAvatarUrl?.(state.client.getHomeserverUrl(), 64, 64, 'crop'))}
@@ -3091,6 +3489,7 @@ function openRoomInfo() {
       ${canEditRoom(room) ? `<button class="btn btn-soft btn-block" style="margin-top:16px;" id="open-room-settings">${icon('settings')} Настройки комнаты</button>` : ''}
       ${canLeave ? `<button class="btn btn-danger-soft btn-block" style="margin-top:8px;" data-leave-room="${escapeAttr(room.roomId)}">${icon('logout')} Покинуть комнату</button>` : ''}`;
   }
+  updateNotifSeg();
   openModal('room-info-modal');
 }
 
@@ -3443,6 +3842,17 @@ function buildDemoData() {
     },
   ];
 
+  state.demoSpaces = [
+    {
+      id: '!space:matrix.org',
+      name: 'Matrix-пространство',
+      children: [
+        { id: '!design:matrix.org', name: 'Design Crew', topic: 'Продуктовый дизайн и интерфейсы' },
+        { id: '!demo-space-child:matrix.org', name: 'Технологии и код', topic: 'Разработка и инструменты' },
+      ],
+    },
+  ];
+
   state.profile = { displayName: 'Вы', avatarUrl: null };
   state.userId = '@you:matrix.org';
   state.demo = true;
@@ -3741,6 +4151,8 @@ function bindEvents() {
     const btn = e.target.closest('[data-md]');
     if (btn) applyMd(btn.dataset.md);
   });
+  $('#poll-btn').addEventListener('click', openPollModal);
+  $('#poll-submit').addEventListener('click', createPoll);
 
   $('#message-input').addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 'i')) {
@@ -3849,6 +4261,17 @@ function bindEvents() {
       return;
     }
 
+    const pollVote = e.target.closest('[data-poll-vote]');
+    if (pollVote && !pollVote.disabled) {
+      votePoll(pollVote.dataset.pollVote, pollVote.dataset.answer);
+      return;
+    }
+    const pollEnd = e.target.closest('[data-poll-end]');
+    if (pollEnd) {
+      endPoll(pollEnd.dataset.pollEnd);
+      return;
+    }
+
     const reactionBtn = e.target.closest('[data-action="reaction-toggle"]');
     if (reactionBtn) {
       toggleReaction(
@@ -3862,7 +4285,7 @@ function bindEvents() {
     const actionBtn = e.target.closest('[data-action]');
     if (!actionBtn) return;
     const action = actionBtn.dataset.action;
-    if (['reply', 'react', 'edit', 'delete', 'copy', 'bookmark', 'pin'].includes(action)) {
+    if (['reply', 'react', 'edit', 'delete', 'copy', 'bookmark', 'pin', 'thread'].includes(action)) {
       handleMessageAction(action, actionBtn.dataset.event, actionBtn);
     }
   });
@@ -3900,6 +4323,25 @@ function bindEvents() {
     if (!room) return;
     closeModals();
     selectRoom(room.dataset.recapRoom);
+  });
+
+  // Spaces
+  $('#space-list').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-space-id]');
+    if (item) openSpace(item.dataset.spaceId);
+  });
+  $('#space-body').addEventListener('click', (e) => {
+    const join = e.target.closest('[data-space-join]');
+    if (!join) return;
+    const roomId = join.dataset.spaceJoin;
+    const existing = state.demo ? state.demoRooms.find((r) => r.id === roomId) : state.client?.getRoom(roomId);
+    if (existing) {
+      closeModals();
+      selectRoom(roomId);
+    } else {
+      closeModals();
+      joinDirectoryRoom(roomId);
+    }
   });
 
   // Invites
@@ -3956,6 +4398,15 @@ function bindEvents() {
     } else {
       closeModals();
       await joinDirectoryRoom(roomId);
+    }
+  });
+
+  // Threads
+  $('#thread-send').addEventListener('click', sendThreadReply);
+  $('#thread-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendThreadReply();
     }
   });
 
@@ -4089,6 +4540,11 @@ function bindEvents() {
     const member = e.target.closest('[data-member]');
     if (member && !e.target.closest('#invite-btn')) {
       openUserProfile(member.dataset.member);
+      return;
+    }
+    const notif = e.target.closest('#room-notif-seg [data-notif]');
+    if (notif) {
+      setRoomNotifLevel(notif.dataset.notif);
       return;
     }
     const btn = e.target.closest('[data-leave-room]');
@@ -4233,6 +4689,12 @@ async function init() {
   if (session?.accessToken && session?.baseUrl && session?.userId) {
     await restoreSession(session);
   }
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
 }
 
 init().catch((e) => {
