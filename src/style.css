@@ -1325,3 +1325,9 @@ body.voice-active .toast-stack { bottom: 150px; }
 .trust-warn { color: var(--danger); font-weight: 600; }
 .trust-muted { color: var(--text-3); }
 #user-trust { margin-bottom: 12px; }
+
+.crypto-status { margin: 0 0 10px; font-size: 0.8rem; line-height: 1.45; }
+.crypto-status.ok { color: var(--ok); }
+.crypto-status.error { color: var(--danger); }
+.crypto-status.muted { color: var(--text-3); }
+.backup-status { font-size: 0.76rem; margin: 0 0 8px; line-height: 1.45; }

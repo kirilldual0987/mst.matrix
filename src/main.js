@@ -1,6 +1,7 @@
 import * as matrixcs from 'matrix-js-sdk';
 import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
 import { renderEmojiPicker } from './emoji.js';
+import { decodeRecoveryKey } from 'matrix-js-sdk/lib/crypto-api/recovery-key.js';
 import { hydrateIcons, icon } from './icons.js';
 import './style.css';
 
@@ -30,6 +31,9 @@ const state = {
   roomAvatarFile: null,
   searchTab: 'messages',
   verify: { request: null, verifier: null, sas: null, user: null, device: null },
+  cryptoReady: false,
+  cryptoError: null,
+  backupCheck: null,
   commandItems: [],
   commandIndex: 0,
   replyingTo: null,
@@ -461,12 +465,32 @@ async function waitForPrepared(client, timeout = 30000) {
 }
 
 async function prepareCrypto(client) {
+  state.cryptoReady = false;
+  state.cryptoError = null;
   try {
-    if (client.getCrypto?.()) return;
-    await client.initRustCrypto({ useIndexedDB: true });
+    if (!client.getCrypto?.()) {
+      await client.initRustCrypto({ useIndexedDB: true });
+    }
+    state.cryptoReady = !!client.getCrypto?.();
+    try {
+      await client.getCrypto().loadSessionBackupPrivateKeyFromSecretStorage();
+    } catch {}
+    try {
+      state.backupCheck = await client.getCrypto().checkKeyBackupAndEnable();
+    } catch {}
   } catch (err) {
+    state.cryptoError = err?.message || String(err);
     console.warn('E2EE init unavailable:', err);
   }
+  refreshSecurityPanel();
+}
+
+async function retryE2EEInit() {
+  if (!state.client) return;
+  await prepareCrypto(state.client);
+  if (state.cryptoReady) toast('E2EE инициализировано', 'success');
+  else toast(`E2EE: ${state.cryptoError || 'не удалось инициализировать'}`, 'error');
+  refreshSecurityPanel();
 }
 
 async function handleLogin(e) {
@@ -1172,7 +1196,8 @@ function pollHtml(msg) {
 function messageBodyHtml(msg) {
   if (msg.redacted) return '<span class="msg-redacted">Сообщение удалено</span>';
   if (msg.encrypted && msg.decryptionFailure) {
-    return `<span class="msg-redacted">🔒 Зашифрованное сообщение. Для расшифровки нужен ключ устройства.</span>`;
+    return `<span class="msg-redacted">🔒 Зашифрованное сообщение. Для расшифровки нужен ключ устройства.</span>
+      <div style="margin-top:8px;"><button type="button" class="btn btn-soft btn-sm" data-action="open-security">Восстановить ключи</button></div>`;
   }
 
   const c = msg.content || {};
@@ -3549,6 +3574,137 @@ async function refreshUserTrust(userId) {
   }
 }
 
+function refreshSecurityPanel() {
+  const status = $('#crypto-status');
+  if (!status) return;
+  if (state.demo) {
+    status.textContent = 'Демо-режим — E2EE не инициализируется';
+    status.className = 'crypto-status muted';
+    return;
+  }
+  if (state.cryptoError) {
+    status.innerHTML = `E2EE не инициализировано: ${escapeHtml(state.cryptoError)} <button class="link-btn" id="crypto-retry">Повторить</button>`;
+    status.className = 'crypto-status error';
+    $('#crypto-retry')?.addEventListener('click', retryE2EEInit);
+    return;
+  }
+  if (state.cryptoReady && state.client?.getCrypto?.()) {
+    status.textContent = `E2EE активно · устройство ${state.client.getDeviceId() || ''}`;
+    status.className = 'crypto-status ok';
+  } else {
+    status.textContent = 'E2EE пока не инициализировано';
+    status.className = 'crypto-status muted';
+  }
+  refreshBackupStatus();
+}
+
+async function refreshBackupStatus() {
+  const el = $('#backup-status');
+  if (!el) return;
+  const crypto = cryptoApi();
+  if (!crypto) {
+    el.textContent = 'Недоступно без E2EE';
+    return;
+  }
+  try {
+    const info = await crypto.getKeyBackupInfo();
+    if (!info) {
+      el.textContent = 'Резервная копия на сервере не найдена.';
+      return;
+    }
+    const active = await crypto.getActiveSessionBackupVersion().catch(() => null);
+    el.textContent = `Версия ${info.version} · ${info.count || 0} ключей · ${active ? 'ключ загружен' : 'ключ не загружен'}`;
+  } catch (err) {
+    el.textContent = err?.message || 'Не удалось проверить резервную копию';
+  }
+}
+
+async function restoreKeyBackup() {
+  const crypto = cryptoApi();
+  if (!crypto) {
+    toast('E2EE не инициализировано', 'error');
+    return;
+  }
+  const keyText = $('#backup-key').value.trim();
+  if (!keyText) {
+    toast('Введите recovery key или используйте Secret Storage', 'info');
+    return;
+  }
+  try {
+    const info = await crypto.getKeyBackupInfo();
+    if (!info) {
+      toast('Резервная копия не найдена', 'error');
+      return;
+    }
+    let raw;
+    try {
+      raw = decodeRecoveryKey(keyText);
+    } catch (err) {
+      toast('Неверный recovery key: ' + (err?.message || ''), 'error');
+      return;
+    }
+    await crypto.storeSessionBackupPrivateKey(raw, info.version);
+    await restoreBackupInternal();
+  } catch (err) {
+    toast(err?.message || 'Не удалось восстановить ключи', 'error');
+  }
+}
+
+async function loadSecretBackupKey() {
+  const crypto = cryptoApi();
+  if (!crypto) {
+    toast('E2EE не инициализировано', 'error');
+    return;
+  }
+  try {
+    await crypto.loadSessionBackupPrivateKeyFromSecretStorage();
+    toast('Ключ резервной копии загружен из Secret Storage', 'success');
+    await refreshBackupStatus();
+    await restoreBackupInternal();
+  } catch (err) {
+    toast(err?.message || 'В Secret Storage нет ключа резервной копии', 'error');
+  }
+}
+
+async function restoreBackupInternal() {
+  const crypto = cryptoApi();
+  if (!crypto) return;
+  toast('Восстанавливаем ключи… Это может занять время', 'info', 6000);
+  try {
+    const res = await crypto.restoreKeyBackup({
+      progressCallback: (p) => {
+        const el = $('#backup-status');
+        if (el) el.textContent = `Восстановление: ${p.stages?.done ?? p.imported ?? 0} / ${p.total ?? '?'}`;
+      },
+    });
+    toast(`Ключи восстановлены: ${res.imported} из ${res.total}`, 'success', 5000);
+    await refreshBackupStatus();
+    retryDecryption();
+  } catch (err) {
+    toast(err?.message || 'Не удалось восстановить ключи', 'error');
+  }
+}
+
+async function retryDecryption() {
+  const room = getCurrentRoom();
+  if (!room || !state.client || state.demo) {
+    toast('Откройте комнату для повторной расшифровки', 'info');
+    return;
+  }
+  let count = 0;
+  for (const ev of room.timeline || []) {
+    if (ev.getType?.() === 'm.room.encrypted' || ev.isEncrypted?.()) {
+      count += 1;
+      try {
+        await state.client.decryptEventIfNeeded(ev);
+      } catch {}
+    }
+  }
+  renderMessages(false);
+  scheduleRooms();
+  toast(`Попытка расшифровки: ${count} событий`, 'info', 3000);
+}
+
 async function loadMyDevices() {
   const el = $('#devices-body');
   if (!el || !state.client) return;
@@ -3679,6 +3835,13 @@ function closeModals() {
   document.body.classList.remove('modal-open');
 }
 
+function openSecuritySettings() {
+  openSettings();
+  setTimeout(() => {
+    $('#crypto-status')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 120);
+}
+
 function openSettings() {
   const displayName = state.profile.displayName || (state.demo ? 'Гость' : 'Вы');
   $('#settings-name').textContent = displayName;
@@ -3704,8 +3867,14 @@ function openSettings() {
   applyAccent();
   $('#sound-toggle').checked = state.prefs.sound;
   $('#notify-toggle').checked = state.prefs.notify;
-  if (!state.demo) loadMyDevices();
-  else $('#devices-body').innerHTML = '<p class="muted">Демо-режим — устройства не загружаются</p>';
+  refreshSecurityPanel();
+  if (!state.demo) {
+    loadMyDevices();
+    refreshBackupStatus();
+  } else {
+    $('#devices-body').innerHTML = '<p class="muted">Демо-режим — устройства не загружаются</p>';
+    $('#backup-status').textContent = 'Демо-режим — резервная копия недоступна';
+  }
   openModal('settings-modal');
 }
 
@@ -3853,6 +4022,13 @@ function allCommands() {
       subtitle: 'Публичные комнаты homeserver’а',
       keywords: 'директория комнаты public explore',
       run: openDirectory,
+    },
+    {
+      icon: 'key',
+      title: 'Восстановить ключи E2EE',
+      subtitle: 'Резервная копия, Secret Storage, расшифровка',
+      keywords: 'e2ee ключи backup security',
+      run: openSecuritySettings,
     },
     {
       icon: 'search',
@@ -4498,6 +4674,10 @@ function bindEvents() {
       }
     }
 
+    if (e.target.closest('[data-action="open-security"]')) {
+      openSecuritySettings();
+      return;
+    }
     const userEl = e.target.closest('[data-user-id]');
     if (userEl && !e.target.closest('.msg-tools')) {
       openUserProfile(userEl.dataset.userId);
@@ -4704,6 +4884,9 @@ function bindEvents() {
   // E2EE
   $('#load-devices').addEventListener('click', loadMyDevices);
   $('#self-verify').addEventListener('click', beginSelfVerification);
+  $('#restore-backup').addEventListener('click', restoreKeyBackup);
+  $('#load-secret').addEventListener('click', loadSecretBackupKey);
+  $('#retry-decrypt').addEventListener('click', retryDecryption);
 
   // Room settings
   $('#room-settings-save').addEventListener('click', saveRoomSettings);
@@ -4996,3 +5179,4 @@ init().catch((e) => {
   console.error(e);
   setAuthError('Не удалось запустить клиент. Обновите страницу.');
 });
+

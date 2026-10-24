@@ -284,12 +284,24 @@
 
           <section class="settings-section">
             <h4>Безопасность</h4>
+            <p class="crypto-status" id="crypto-status"></p>
             <div id="devices-body" class="devices-body"><p class="muted">Загрузка устройств…</p></div>
             <div class="security-actions">
               <button class="btn btn-soft btn-sm" id="load-devices" data-icon="refresh">Обновить</button>
               <button class="btn btn-soft btn-sm" id="self-verify" data-icon="shield">Проверить другое устройство</button>
             </div>
             <p class="muted" id="security-note"></p>
+
+            <div class="settings-label">Резервная копия ключей</div>
+            <p class="muted backup-status" id="backup-status">Проверяем…</p>
+            <div class="field">
+              <div class="input-wrap"><input id="backup-key" type="text" placeholder="Recovery key (можно с пробелами)" /></div>
+            </div>
+            <div class="security-actions">
+              <button class="btn btn-soft btn-sm" id="restore-backup" data-icon="download">Восстановить ключи</button>
+              <button class="btn btn-ghost btn-sm" id="load-secret" data-icon="key">Ключ из Secret Storage</button>
+              <button class="btn btn-ghost btn-sm" id="retry-decrypt" data-icon="refresh">Расшифровать заново</button>
+            </div>
           </section>
 
           <section class="settings-section">
