@@ -1,4 +1,5 @@
 import * as matrixcs from 'matrix-js-sdk';
+import { encryptAttachment, decryptAttachment } from 'matrix-encrypt-attachment';
 import { hydrateIcons, icon } from './icons.js';
 import './style.css';
 
@@ -10,6 +11,8 @@ const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 
 const SESSION_KEY = 'mst.matrix.session.v1';
 const PREFS_KEY = 'mst.matrix.prefs.v1';
+const DRAFTS_KEY = 'mst.matrix.drafts.v1';
+const BOOKMARKS_KEY = 'mst.matrix.bookmarks.v1';
 
 const state = {
   client: null,
@@ -19,12 +22,22 @@ const state = {
   roomFilter: '',
   messageFilter: '',
   pendingFiles: [],
+  drafts: {},
+  bookmarks: [],
+  focusMode: false,
+  loadingOlder: false,
+  commandItems: [],
+  commandIndex: 0,
   replyingTo: null,
   typing: {},
   demo: false,
   demoRooms: [],
   demoRoomId: null,
   readReceiptTimers: {},
+  messageContent: new Map(),
+  voice: { recorder: null, stream: null, chunks: [], startTs: 0, timer: null, cancel: false },
+  mediaBlobCache: new Map(),
+  mediaObjectUrls: new Map(),
   prefs: {
     theme: 'system',
     accent: 'violet',
@@ -32,6 +45,10 @@ const state = {
     notify: false,
   },
 };
+
+const DEMO_AUDIO = 'data:audio/wav;base64,UklGRjQnAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAnAAB/f39/f39/gICAgICAf39/fn5+fX19fHx8fH19fX19fn5+fn5+f39/f3+AgIGBgoKDg4ODg4OCgYB/fXx6eXd2dXV1dXZ3eXt9f4GEhoiJioqKiomHhoSBf317eXh3dnZ2dnd3eHl6e3x9fX5+fn9/gICBgoOEhoeIiYqKiomIhoSBfnt3dHFubGpqamttcHR4fIGGio6Rk5WVlZSRjouHg397d3RycG9vb3Bxc3R2eHl7fH19fn9/gIGCg4WGiIqMjpCQkZCPjYqGgXx3cm1oZGFfX2BiZmpwdn2Ei5GXm56goJ+dmZSPiYN9eHNvbGloaGlqbG5xc3Z4ent8fX5/gIGCg4WIio2QkpWWl5eWlJGNh4F6c2tlX1pWVFRWWV9lbXZ/iZGaoKapq6uppaCZkoqCe3RuaWViYWFjZWdqbnF0dnl7fH1+f4CCg4WIi46SlZmbnZ6enJmVjod/dm1kXFVPS0lKTVJZYmx3g46Zo6uxtba1sq2mnZSKgXdvaGJeW1pbXWBjZ2tvcnV4enx9f4CBg4WIi4+Tl5ueoaOko6Cclo+GfHJoXlVNR0RDREhOV2FteoeTn6mxtrq6ubSupp2TiH50bGVgXFpZWlxgY2dsb3N2eXt8fn+AgYOGiIyQlJicn6KjpKKfm5SNg3pvZVtSS0ZDQ0VKUVplcX2KlqGrsri6urizrKSakIV7cmpjXltZWVtdYWRpbXF0d3l7fX5/gIKEhomNkZWZnaCipKSinpmSioF3bGJZUEpFQ0NGS1NdaHSBjZmkrbS4urq3saqhl42DeXBoYl1aWVpbXmJmam5xdXh6fH1+f4GChYeKjpKWmp6ho6SjoZ2XkIh+dGpfVk5IRENER01VX2t4hJGdp6+1ubq5ta+onpSKgHZtZmBcWllaXF9jZ2tvcnZ4enx9f4CBg4WIi4+Tl5ufoqOko6Cclo6Fe3FnXVRMR0RDREhPWGNue4iUn6mxt7q6uLStpZySh310a2RfW1pZWl1gZGhscHN2eXt8fn+AgoSGiYyQlJicoKKkpKKfmpSMg3luZFpSS0ZDQ0VKUVtmcn6Ll6Kss7i6ureyq6OZj4R6cWljXltZWVtdYWVpbXF0d3l7fX5/gYKEh4qNkZWZnaCjpKOinpmSiYB2a2FYUElFQ0NGTFReaXWCj5qlrrW5urm2samgloyCeG9nYV1aWVpbXmJmam5ydXh6fH1+gIGDhYeLjpKWmp6ho6SjoZ2XkId9c2lfVU5IRENESE5WYGx5hZKeqLC2ubq5ta+nnpOJf3VtZmBcWllaXF9jZ2tvc3Z4e3x+f4CBg4WIjI+Tl5ufoqOko6CblY2EenBmXFNMRkNDRUlQWWRwfImVoKqyt7q6uLOtpJuRhnxza2RfW1lZW11gZGhscHR3eXt9fn+AgoSGiYyQlJmcoKKkpKKfmpOLgnhtY1lRSkVDQ0VLUlxnc4CMmKOss7i6ureyq6KYjoN6cGliXltZWlteYWVpbXF1d3p8fX5/gYKEh4qOkZaanaGjpKOhnZiRiX91amBXT0lEQ0NHTFReanaDkJymr7W5urm2sKiflYuBd25nYV1aWVpcX2Jmam5ydXh6fH1/gIGDhYiLj5OXm56ho6SjoJyWj4Z8cmheVU1HRENESE5XYW16h5OfqbG2urq5tK6mnZOIfnRsZWBcWllaXGBjZ2xvc3Z5e3x+f4CBg4aIjJCUmJyfoqOkop+blI2Dem9lW1JLRkNDRUpRWmVxfYqWoauyuLq6uLOspJqQhXtyamNeW1lZW11hZGltcXR3eXt9fn+AgoSGiY2RlZmdoKKkpKKemZKKgXdsYllQSkVDQ0ZLU11odIGNmaSttLi6urexqqGXjYN5cGhiXVpZWlteYmZqbnF1eHp8fX5/gYKFh4qOkpaanqGjpKOhnZeQiH50al9WTkhEQ0RHTVVfa3iEkZ2nr7W5urm1r6ielIqAdm1mYFxaWVpcX2Nna29ydnh6fH1/gIGDhYiLj5OXm5+io6SjoJyWjoV7cWddVExHRENESE9YY257iJSfqbG3urq4tK2lnJKHfXRrZF9bWllaXWBkaGxwc3Z5e3x+f4CChIaJjJCUmJygoqSkop+alIyDeW5kWlJLRkNDRUpRW2ZyfouXoqyzuLq6t7Kro5mPhHpxaWNeW1lZW11hZWltcXR3eXt9fn+BgoSHio2RlZmdoKOko6KemZKJgHZrYVhQSUVDQ0ZMVF5pdYKPmqWutbm6ubaxqaCWjIJ4b2dhXVpZWlteYmZqbnJ1eHp8fX6AgYOFh4uOkpaanqGjpKOhnZeQh31zaV9VTkhEQ0RITlZgbHmFkp6osLa5urm1r6eek4l/dW1mYFxaWVpcX2Nna29zdnh7fH5/gIGDhYiMj5OXm5+io6SjoJuVjYR6cGZcU0xGQ0NFSVBZZHB8iZWgqrK3urq4s62km5GGfHNrZF9bWVlbXWBkaGxwdHd5e31+f4CChIaJjJCUmZygoqSkop+ak4uCeG1jWVFKRUNDRUtSXGdzgIyYo6yzuLq6t7KropiOg3pwaWJeW1laW15hZWltcXV3enx9fn+BgoSHio6RlpqdoaOko6GdmJGJf3VqYFdPSURDQ0dMVF5qdoOQnKavtbm6ubawqJ+Vi4F3bmdhXVpZWlxfYmZqbnJ1eHp8fX+AgYOFiIuPk5ebnqGjpKOgnJaPhnxyaF5VTUdEQ0RITldhbXqHk5+psba6urm0rqadk4h+dGxlYFxaWVpcYGNnbG9zdnl7fH5/gIGDhoiMkJSYnJ+io6Sin5uUjYN6b2VbUktGQ0NFSlFaZXF9ipahq7K4urq4s6ykmpCFe3JqY15bWVlbXWFkaW1xdHd5e31+f4CChIaJjZGVmZ2goqSkop6ZkoqBd2xiWVBKRUNDRktTXWh0gY2ZpK20uLq6t7GqoZeNg3lwaGJdWllaW15iZmpucXV4enx9fn+BgoWHio6SlpqeoaOko6Gdl5CIfnRqX1ZOSERDREdNVV9reISRnaevtbm6ubWvqJ6UioB2bWZgXFpZWlxfY2drb3J2eHp8fX+AgYOFiIuPk5ebn6KjpKOgnJaOhXtxZ11UTEdEQ0RIT1hjbnuIlJ+psbe6uri0raWckod9dGtkX1taWVpdYGRobHBzdnl7fH5/gIKEhomMkJSYnKCipKSin5qUjIN5bmRaUktGQ0NFSlFbZnJ+i5eirLO4urq3squjmY+EenFpY15bWVlbXWFlaW1xdHd5e31+f4GChIeKjZGVmZ2go6Sjop6ZkomAdmthWFBJRUNDRkxUXml1go+apa61ubq5trGpoJaMgnhvZ2FdWllaW15iZmpucnV4enx9foCBg4WHi46SlpqeoaOko6Gdl5CHfXNpX1VOSERDREhOVmBseYWSnqiwtrm6ubWvp56TiX91bWZgXFpZWlxfY2drb3N2eHt8fn+AgYOFiIyPk5ebn6KjpKOgm5WNhHpwZlxTTEZDQ0VJUFlkcHyJlaCqsre6urizraSbkYZ8c2tkX1tZWVtdYGRobHB0d3l7fX5/gIKEhomMkJSZnKCipKSin5qTi4J4bWNZUUpFQ0NFS1JcZ3OAjJijrLO4urq3squimI6DenBpYl5bWVpbXmFlaW1xdXd6fH1+f4GChIeKjpGWmp2ho6SjoZ2YkYl/dWpgV09JRENDR0xUXmp2g5Ccpq+1ubq5trCon5WLgXduZ2FdWllaXF9iZmpucnV4enx9f4CBg4WIi4+Tl5ueoaOko6Cclo+GfHJoXlVNR0RDREhOV2FteoeTn6mxtrq6ubSupp2TiH50bGVgXFpZWlxgY2dsb3N2eXt8fn+AgYOGiIyQlJicn6KjpKKfm5SNg3pvZVtSS0ZDQ0VKUVplcX2KlqGrsri6urizrKSakIV7cmpjXltZWVtdYWRpbXF0d3l7fX5/gIKEhomNkZWZnaCipKSinpmSioF3bGJZUEpFQ0NGS1NdaHSBjZmkrbS4urq3saqhl42DeXBoYl1aWVpbXmJmam5xdXh6fH1+f4GChYeKjpKWmp6ho6SjoZ2XkIh+dGpfVk5IRENER01VX2t4hJGdp6+1ubq5ta+onpSKgHZtZmBcWllaXF9jZ2tvcnZ4enx9f4CBg4WIi4+Tl5ufoqOko6Cclo6Fe3FnXVRMR0RDREhPWGNue4iUn6mxt7q6uLStpZySh310a2RfW1pZWl1gZGhscHN2eXt8fn+AgoSGiYyQlJicoKKkpKKfmpSMg3luZFpSS0ZDQ0VKUVtmcn6Ll6Kss7i6ureyq6OZj4R6cWljXltZWVtdYWVpbXF0d3l7fX5/gYKEh4qNkZWZnaCjpKOinpmSiYB2a2FYUElFQ0NGTFReaXWCj5qlrrW5urm2samgloyCeG9nYV1aWVpbXmJmam5ydXh6fH1+gIGDhYeLjpKWmp6ho6SjoZ2XkId9c2lfVU5IRENESE5WYGx5hZKeqLC2ubq5ta+nnpOJf3VtZmBcWllaXF9jZ2tvc3Z4e3x+f4CBg4WIjI+Tl5ufoqOko6CblY2EenBmXFNMRkNDRUlQWWRwfImVoKqyt7q6uLOtpJuRhnxza2RfW1lZW11gZGhscHR3eXt9fn+AgoSGiYyQlJmcoKKkpKKfmpOLgnhtY1lRSkVDQ0VLUlxnc4CMmKOss7i6ureyq6KYjoN6cGliXltZWlteYWVpbXF1d3p8fX5/gYKEh4qOkZaanaGjpKOhnZiRiX91amBXT0lEQ0NHTFReanaDkJymr7W5urm2sKiflYuBd25nYV1aWVpcX2Jmam5ydXh6fH1/gIGDhYiLj5OXm56ho6SjoJyWj4Z8cmheVU1HRENESE5XYW16h5OfqbG2urq5tK6mnZOIfnRsZWBcWllaXGBjZ2xvc3Z5e3x+f4CBg4aIjJCUmJyfoqOkop+blI2Dem9lW1JLRkNDRUpRWmVxfYqWoauyuLq6uLOspJqQhXtyamNeW1lZW11hZGltcXR3eXt9fn+AgoSGiY2RlZmdoKKkpKKemZKKgXdsYllQSkVDQ0ZLU11odIGNmaSttLi6urexqqGXjYN5cGhiXVpZWlteYmZqbnF1eHp8fX5/gYKFh4qOkpaanqGjpKOhnZeQiH50al9WTkhEQ0RHTVVfa3iEkZ2nr7W5urm1r6ielIqAdm1mYFxaWVpcX2Nna29ydnh6fH1/gIGDhYiLj5OXm5+io6SjoJyWjoV7cWddVExHRENESE9YY257iJSfqbG3urq4tK2lnJKHfXRrZF9bWllaXWBkaGxwc3Z5e3x+f4CChIaJjJCUmJygoqSkop+alIyDeW5kWlJLRkNDRUpRW2ZyfouXoqyzuLq6t7Kro5mPhHpxaWNeW1lZW11hZWltcXR3eXt9fn+BgoSHio2RlZmdoKOko6KemZKJgHZrYVhQSUVDQ0ZMVF5pdYKPmqWutbm6ubaxqaCWjIJ4b2dhXVpZWlteYmZqbnJ1eHp8fX6AgYOFh4uOkpaanqGjpKOhnZeQh31zaV9VTkhEQ0RITlZgbHmFkp6osLa5urm1r6eek4l/dW1mYFxaWVpcX2Nna29zdnh7fH5/gIGDhYiMj5OXm5+io6SjoJuVjYR6cGZcU0xGQ0NFSVBZZHB8iZWgqrK3urq4s62km5GGfHNrZF9bWVlbXWBkaGxwdHd5e31+f4CChIaJjJCUmZygoqSkop+ak4uCeG1jWVFKRUNDRUtSXGdzgIyYo6yzuLq6t7KropiOg3pwaWJeW1laW15hZWltcXV3enx9fn+BgoSHio6RlpqdoaOko6GdmJGJf3VqYFdPSURDQ0dMVF5qdoOQnKavtbm6ubawqJ+Vi4F3bmdhXVpZWlxfYmZqbnJ1eHp8fX+AgYOFiIuPk5ebnqGjpKOgnJaPhnxyaF5VTUdEQ0RITldhbXqHk5+psba6urm0rqadk4h+dGxlYFxaWVpcYGNnbG9zdnl7fH5/gIGDhoiMkJSYnJ+io6Sin5uUjYN6b2VbUktGQ0NFSlFaZXF9ipahq7K4urq4s6ykmpCFe3JqY15bWVlbXWFkaW1xdHd5e31+f4CChIaJjZGVmZ2goqSkop6ZkoqBd2xiWVBKRUNDRktTXWh0gY2ZpK20uLq6t7GqoZeNg3lwaGJdWllaW15iZmpucXV4enx9fn+BgoWHio6SlpqeoaOko6Gdl5CIfnRqX1ZOSERDREdNVV9reISRnaevtbm6ubWvqJ6UioB2bWZgXFpZWlxfY2drb3J2eHp8fX+AgYOFiIuPk5ebn6KjpKOgnJaOhXtxZ11UTEdEQ0RIT1hjbnuIlJ+psbe6uri0raWckod9dGtkX1taWVpdYGRobHBzdnl7fH5/gIKEhomMkJSYnKCipKSin5qUjIN5bmRaUktGQ0NFSlFbZnJ+i5eirLO4urq3squjmY+EenFpY15bWVlbXWFlaW1xdHd5e31+f4GChIeKjZGVmZ2go6Sjop6ZkomAdmthWFBJRUNDRkxUXml1go+apa61ubq5trGpoJaMgnhvZ2FdWllaW15iZmpucnV4enx9foCBg4WHi46SlpqeoaOko6Gdl5CHfXNpX1VOSERDREhOVmBseYWSnqiwtrm6ubWvp56TiX91bWZgXFpZWlxfY2drb3N2eHt8fn+AgYOFiIyPk5ebn6KjpKOgm5WNhHpwZlxTTEZDQ0VJUFlkcHyJlaCqsre6urizraSbkYZ8c2tkX1tZWVtdYGRobHB0d3l7fX5/gIKEhomMkJSZnKCipKSin5qTi4J4bWNZUUpFQ0NFS1JcZ3OAjJijrLO4urq3squimI6DenBpYl5bWVpbXmFlaW1xdXd6fH1+f4GChIeKjpGWmp2ho6SjoZ2YkYl/dWpgV09JRENDR0xUXmp2g5Ccpq+1ubq5trCon5WLgXduZ2FdWllaXF9iZmpucnV4enx9f4CBg4WIi4+Tl5ueoaOko6Cclo+GfHJoXlVNR0RDREhOV2FteoeTn6mxtrq6ubSupp2TiH50bGVgXFpZWlxgY2dsb3N2eXt8fn+AgYOGiIyQlJicn6KjpKKfm5SNg3pvZVtSS0ZDQ0VKUVplcX2KlqGrsri6urizrKSakIV7cmpjXltZWVtdYWRpbXF0d3l7fX5/gIKEhomNkZWZnaCipKSinpmSioF3bGJZUEpFQ0NGS1NdaHSBjZmkrbS4urq3saqhl42DeXBoYl1aWVpbXmJmam5xdXh6fH1+f4GChYeKjpKWmp6ho6SjoZ2XkIh+dGpfVk5IRENER01VX2t4hJGdp6+1ubq5ta+onpSKgHZtZmBcWllaXF9jZ2tvcnZ4enx9f4CBg4WIi4+Tl5ufoqOko6Cclo6Fe3FnXVRMR0RDREhPWGNue4iUn6mxt7q6uLStpZySh310a2RfW1pZWl1gZGhscHN2eXt8fn+AgoSGiYyQlJicoKKkpKKfmpSMg3luZFpSS0ZDQ0VKUVtmcn6Ll6Kss7i6ureyq6OZj4R6cWljXltZWVtdYWVpbXF0d3l7fX5/gYKEh4qNkZWZnaCjpKOinpmSiYB2a2FYUElFQ0NGTFReaXWCj5qlrrW5urm2samgloyCeG9nYV1aWVpbXmJmam5ydXh6fH1+gIGDhYeLjpKWmp6ho6SjoZ2XkId9c2lfVU5IRENESE5WYGx5hZKeqLC2ubq5ta+nnpOJf3VtZmBcWllaXF9jZ2tvc3Z4e3x+f4CBg4WIjI+Tl5ufoqOko6CblY2EenBmXFNMRkNDRUlQWWRwfImVoKqyt7q6uLOtpJuRhnxza2RfW1lZW11gZGhscHR3eXt9fn+AgoSGiYyQlJmcoKKkpKKfmpOLgnhtY1lRSkVDQ0VLUlxnc4CMmKOss7i6ureyq6KYjoN6cGliXltZWlteYWVpbXF1d3p8fX5/gYKEh4qOkZaanaGjpKOhnZiRiX91amBXT0lEQ0NHTFReanaDkJymr7W5urm2sKiflYuBd25nYV1aWVpcX2Jmam5ydXh6fH1/gIGDhYiLj5OXm56ho6SjoJyWj4Z8cmheVU1HRENESE5XYW16h5OfqbG2urq5tK6mnZOIfnRsZWBcWllaXGBjZ2xvc3Z5e3x+f4CBg4aIjJCUmJyfoqOkop+blI2Dem9lW1JLRkNDRUpRWmVxfYqWoauyuLq6uLOspJqQhXtyamNeW1lZW11hZGltcXR3eXt9fn+AgoSGiY2RlZmdoKKkpKKemZKKgXdsYllQSkVDQ0ZLU11odIGNmaSttLi6urexqqGXjYN5cGhiXVpZWlteYmZqbnF1eHp8fX5/gYKFh4qOkpaanqGjpKOhnZeQiH50al9WTkhEQ0RHTVVfa3iEkZ2nr7W5urm1r6ielIqAdm1mYFxaWVpcX2Nna29ydnh6fH1/gIGDhYiLj5OXm5+io6SjoJyWjoV7cWddVExHRENESE9YY257iJSfqbG3urq4tK2lnJKHfXRrZF9bWllaXWBkaGxwc3Z5e3x+f4CChIaJjJCUmJygoqSkop+alIyDeW5kWlJLRkNDRUpRW2ZyfouXoqyzuLq6t7Kro5mPhHpxaWNeW1lZW11hZWltcXR3eXt9fn+BgoSHio2RlZmdoKOko6KemZKJgHZrYVhQSUVDQ0ZMVF5pdYKPmqWutbm6ubaxqaCWjIJ4b2dhXVpZWlteYmZqbnJ1eHp8fX6AgYOFh4uOkpaanqGjpKOhnZeQh31zaV9VTkhEQ0RITlZgbHmFkp6osLa5urm1r6eek4l/dW1mYFxaWVpcX2Nna29zdnh7fH5/gIGDhYiMj5OXm5+io6SjoJuVjYR6cGZcU0xGQ0NFSVBZZHB8iZWgqrK3urq4s62km5GGfHNrZF9bWVlbXWBkaGxwdHd5e31+f4CChIaJjJCUmZygoqSkop+ak4uCeG1jWVFKRUNDRUtSXGdzgIyYo6yzuLq6t7KropiOg3pwaWJeW1laW15hZWltcXV3enx9fn+BgoSHio6RlpqdoaOko6GdmJGJf3VqYFdPSURDQ0dMVF5qdoOQnKavtbm6ubawqJ+Vi4F3bmdhXVpZWlxfYmZqbnJ1eHp8fX+AgYOFiIuPk5ebnqGjpKOgnJaPhnxyaF5VTUdEQ0RITldhbXqHk5+psba6urm0rqadk4h+dGxlYFxaWVpcYGNnbG9zdnl7fH5/gIGDhoiMkJSYnJ+io6Sin5uUjYN6b2VbUktGQ0NFSlFaZXF9ipahq7K4urq4s6ykmpCFe3JqY15bWVlbXWFkaW1xdHd5e31+f4CChIaJjZGVmZ2goqSkop6ZkoqBd2xiWVBKRUNDRktTXWh0gY2ZpK20uLq6t7GqoZeNg3lwaGJdWllaW15iZmpucXV4enx9fn+BgoWHio6SlpqeoaOko6Gdl5CIfnRqX1ZOSERDREdNVV9reISRnaevtbm6ubWvqJ6UioB2bWZgXFpZWlxfY2drb3J2eHp8fX+AgYOFiIuPk5ebn6KjpKOgnJaOhXtxZ11UTEdEQ0RIT1hjbnuIlJ+psbe6uri0raWckod9dGtkX1taWVpdYGRobHBzdnl7fH5/gIKEhomMkJSYnKCipKSin5qUjIN5bmRaUktGQ0NFSlFbZnJ+i5eirLO4urq3squjmY+EenFpY15bWVlbXWFlaW1xdHd5e31+f4GChIeKjZGVmZ2go6Sjop6ZkomAdmthWFBJRUNDRkxUXml1go+apa61ubq5trGpoJaMgnhvZ2FdWllaW15iZmpucnV4enx9foCBg4WHi46SlpqeoaOko6Gdl5CHfXNpX1VOSERDREhOVmBseYWSnqiwtrm6ubWvp56TiX91bWZgXFpZWlxfY2drb3N2eHt8fn+AgYOFiIyPk5ebn6KjpKOgm5WNhHpwZlxTTEZDQ0VJUFlkcHyJlaCqsre6urizraSbkYZ8c2tkX1tZWVtdYGRobHB0d3l7fX5/gIKEhomMkJSZnKCipKSin5qTi4J4bWNZUUpFQ0NFS1JcZ3OAjJijrLO4urq3squimI6DenBpYl5bWVpbXmFlaW1xdXd6fH1+f4GChIeKjpGWmp2ho6SjoZ2YkYl/dWpgV09JRENDR0xUXmp2g5Ccpq+1ubq5trCon5WLgXduZ2FdWllaXF9iZmpucnV4enx9f4CBg4WIi4+Tl5ueoaOko6Cclo+GfHJoXlVNR0RDREhOV2FteoeTn6mxtrq6ubSupp2TiH50bGVgXFpZWlxgY2dsb3N2eXt8fn+AgYOGiIyQlJicn6KjpKKfm5SNg3pvZVtSS0ZDQ0VKUVplcX2KlqGrsri6urizrKSakIV7cmpjXltZWVtdYWRpbXF0d3l7fX5/gIKEhomNkZWZnaCipKSinpmSioF3bGJZUEpFQ0NGS1NdaHSBjZmkrbS4urq3saqhl42DeXBoYl1aWVpbXmJmam5xdXh6fH1+f4GChYeKjpKWmp6ho6SjoZ2XkIh+dGpfVk5IRENER01VX2t4hJGdp6+1ubq5ta+onpSKgHZtZmBcWllaXF9jZ2tvcnZ4enx9f4CBg4WIi4+Tl5ufoqOko6Cclo6Fe3FnXVRMR0RDREhPWGNue4iUn6mxt7q6uLStpZySh310a2RfW1pZWl1gZGhscHN2eXt8fn+AgoSGiYyQlJicoKKkpKKfmpSMg3luZFpSS0ZDQ0VKUVtmcn6Ll6Kss7i6ureyq6OZj4R6cWljXltZWVtdYWVpbXF0d3l7fX5/gYKEh4qNkZWZnaCjpKOinpmSiYB2a2FYUElFQ0NGTFReaXWCj5qlrrW5urm2samgloyCeG9nYV1aWVpbXmJmam5ydXh6fH1+gIGDhYeLjpKWmp6ho6SjoZ2XkId9c2lfVU5IRENESE5WYGx5hZKeqLC2ubq5ta+nnpOJf3VtZmBcWllaXF9jZ2tvc3Z4e3x+f4CBg4WIjI+Tl5ufoqOko6CblY2EenBmXFNMRkNDRUlQWWRwfImVoKqyt7q6uLOtpJuRhnxza2RfW1lZW11gZGhscHR3eXt9fn+AgoSGiYyQlJmcoKKkpKKfmpOLgnhtY1lRSkVDQ0VLUlxnc4CMmKOss7i6ureyq6KYjoN6cGliXltZWlteYWVpbXF1d3p8fX5/gYKEh4qOkZaanaGjpKOhnZiRiX91amBXT0lEQ0NHTFReanaDkJymr7W5urm2sKiflYuBd25nYV1aWVpcX2Jmam5ydXh6fH1/gIGDhYiLj5OXm56ho6SjoJyWj4Z8cmheVU1HRENESE5XYW16h5OfqbG2urq5tK6mnZOIfnRsZWBcWllaXGBjZ2xvc3Z5e3x+f4CBg4aIjJCUmJyfoqOkop+blI2Dem9lW1JLRkNDRUpRWmVxfYqWoauyuLq6uLOspJqQhXtyamNeW1lZW11hZGltcXR3eXt9fn+AgoSGiY2RlZmdoKKkpKKemZKKgXdsYllQSkVDQ0ZLU11odIGNmaSttLi6urexqqGXjYN5cGhiXVpZWlteYmZqbnF1eHp8fX5/gYKFh4qOkpaanqGjpKOhnZeQiH50al9WTkhEQ0RHTVVfa3iEkZ2nr7W5urm1r6ielIqAdm1mYFxaWVpcX2Nna29ydnh6fH1/gIGDhYiLj5OXm5+io6SjoJyWjoV7cWddVExHRENESE9YY257iJSfqbG3urq4tK2lnJKHfXRrZF9bWllaXWBkaGxwc3Z5e3x+f4CChIaJjJCUmJygoqSkop+alIyDeW5kWlJLRkNDRUpRW2Zyf4uXoqyzuLq6t7Kro5mPhHpxaWNeW1lZW11hZWltcXR3eXt9fn+BgoSHio2RlZmdoKOko6KemZKJgHZrYVhQSUVDQ0ZMVF5pdYKPmqWutbm6ubaxqaCWjIJ4b2dhXVpZWlteYmZqbnJ1eHp8fX6AgYOFh4uOkpaanqGjpKOhnZeQh31zaV9VTkhEQ0RITlZgbHmFkp6osLa5urm1r6eek4l/dW1mYFxaWVpcX2Nna29zdnh7fH5/gIGDhYiMj5OXm5+io6SjoJuVjYR6cGZcU0xGQ0NFSVBZZHB8iZWgqrK3urq4s62km5GGfHNrZF9bWVlbXWBkaGxwdHd5e31+f4CChIaJjJCUmJyfoaOioZ6ZkouCeG5kW1NMSEZGSE1UXWh0gIyXoaqwtbe2s66ooJaNg3pxamRgXVxcXmBkZ2tvcnV4enx9fn+AgoSGiYyQk5eanZ+gn56alY+Hf3ZtZFxVT0tKS05TWmNtd4ONmKGorrGysa6popuSiYB4cWplYmBfX2FkZ2pucXR3eXt8fn9/gYKEhomMj5KWmZudnZyal5KMhX10bGRdV1JPTlBTWF9ncXuFj5igpqutrqyppJ2WjoZ+d3BrZmRiYmNkZ2ptcHN2eHp8fX5/gIGChIaJi46RlJeZmpqZl5OPiYJ7c2xlXllVU1NVWF1kbHV+h5CYnqSnqamnpJ+ZkouDfHZwa2hmZWVmZ2psb3J1d3l7fH1+f4CBgoSGiIuOkJOVl5eXlpSQjIaAeXNsZmBcWVhYWl1iaXB4gIiQl5yho6Wkop+alI6IgXt1cG1qaGdoaWptb3J0d3l6fH1+fn+AgYKEhoiKjY+Rk5SVlJOQjYmEfnhybGdjX11cXV9iZ21ze4KJj5WanZ+gn52alZCLhX96dXFubGtqa2xtb3J0dnh6e3x9fn9/gIGCg4WHiYuNj5GSkpGQjYqGgn14cm5pZWNhYWFkZ2txd32DiY+Tl5qbm5qYlZGNiIN+eXVycG5tbW5vcHJ0dnh5e3x9fn5/f4CBgoOFhoiKjI2Oj4+OjYuIhIB8d3Nva2hmZWVmaGtvdHl+hImNkZSWl5eWlJGNiYWBfXl2dHJwcHBxcnN1dnh5e3x9fX5+f3+AgYKDhIWHiIqLjIyMi4qIhYJ/e3h0cW5sampqa21wc3d7gISIjI6RkpKSkY+NioaDgHx5d3V0c3Nzc3R2d3h5e3x8fX5+fn9/gICBgoOEhoeIiYmJiYiHhYOBfnt4dnNxb25ub3BxdHZ6fYCEh4mLjY6OjYyLiYaEgX98enh3dnZ1dnZ3eHl6e3x8fX5+fn9/f4CAgYGCg4SFhYaGhoaFhYOCgH58eXh2dHNzc3N0dXd5fH6Ag4WHiImJiYmIh4WDgoB+fHt6eXl4eHl5enp7fHx9fX5+fn5/f39/gICBgYKCg4ODhISDg4KBgH9+fHt6eXh3d3d4eHl6fH1/gIGDhISFhYWEhIOCgYB/fn18fHt7e3t7fHx8fX19fn5+fn5+f39/f39/gICAgICBgYGBgYCAgH9/fn19fXx8fHx8fHx9fX5+f3+AgICAgICAgICAf39/f35+fn5+fn5+fn5+fn5+fn5+fn5+';
+
+const watchedTypingMembers = new WeakSet();
 
 const EMOJIS = [
   '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰',
@@ -152,6 +169,96 @@ function mxcToUrl(mxc, w = 800, h = 800, method = 'scale') {
   }
 }
 
+function attachmentMxc(content) {
+  return content?.file?.url || content?.url || '';
+}
+
+function attachmentCacheKey(content) {
+  return `${attachmentMxc(content)}|${content?.file?.key?.k || ''}`;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+async function fetchMediaBytes(mxc) {
+  if (!mxc) throw new Error('Нет ссылки на файл');
+  const candidates = [];
+
+  if (state.client && mxc.startsWith('mxc://')) {
+    try {
+      const authUrl = state.client.mxcUrlToHttp(mxc, undefined, undefined, undefined, true, true, true);
+      if (authUrl) candidates.push({ url: authUrl, auth: true });
+    } catch {}
+    try {
+      const plainUrl = state.client.mxcUrlToHttp(mxc, undefined, undefined, undefined, true, true, false);
+      if (plainUrl) candidates.push({ url: plainUrl, auth: false });
+    } catch {}
+  }
+  if (/^(https?:|blob:|data:)/.test(mxc)) candidates.push({ url: mxc, auth: false });
+
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate.url, {
+        headers: candidate.auth && state.client
+          ? { Authorization: `Bearer ${state.client.getAccessToken()}` }
+          : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.arrayBuffer();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('Не удалось загрузить файл');
+}
+
+async function resolveAttachmentBlob(content) {
+  const cacheKey = attachmentCacheKey(content);
+  if (state.mediaBlobCache.has(cacheKey)) return state.mediaBlobCache.get(cacheKey);
+
+  const promise = (async () => {
+    const mxc = attachmentMxc(content);
+    if (!mxc) throw new Error('Файл недоступен');
+    const ciphertext = await fetchMediaBytes(mxc);
+    let data = ciphertext;
+    if (content.file) {
+      data = await decryptAttachment(ciphertext, content.file);
+    }
+    const type = content.info?.mimetype || (content.file ? 'application/octet-stream' : '');
+    return new Blob([data], { type });
+  })();
+
+  state.mediaBlobCache.set(cacheKey, promise);
+  promise.catch(() => state.mediaBlobCache.delete(cacheKey));
+  return promise;
+}
+
+async function resolveAttachmentUrl(content) {
+  const key = attachmentCacheKey(content);
+  if (state.mediaObjectUrls.has(key)) return state.mediaObjectUrls.get(key);
+  const blob = await resolveAttachmentBlob(content);
+  const url = URL.createObjectURL(blob);
+  state.mediaObjectUrls.set(key, url);
+  return url;
+}
+
+async function downloadAttachment(content, name = 'file') {
+  const blob = await resolveAttachmentBlob(content);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name || 'file';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
 function avatarHtml(name, mxcOrUrl, cls = '') {
   const hue = hueFor(name || '?');
   const url = mxcOrUrl
@@ -205,6 +312,25 @@ function loadPrefs() {
 
 function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(state.prefs)); } catch {}
+}
+
+function loadUserData() {
+  try {
+    const drafts = JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}');
+    if (drafts && typeof drafts === 'object') state.drafts = drafts;
+  } catch {}
+  try {
+    const bookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+    if (Array.isArray(bookmarks)) state.bookmarks = bookmarks;
+  } catch {}
+}
+
+function saveDrafts() {
+  try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(state.drafts)); } catch {}
+}
+
+function saveBookmarks() {
+  try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(state.bookmarks)); } catch {}
 }
 
 function resolveTheme(theme) {
@@ -340,7 +466,7 @@ async function handleLogin(e) {
     attachClient(client);
     await prepareCrypto(client);
     const ready = waitForPrepared(client);
-    client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true });
+    client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true, threadSupport: true });
     await ready;
 
     const remember = $('#remember')?.checked !== false;
@@ -380,7 +506,7 @@ async function restoreSession(session) {
     attachClient(client);
     await prepareCrypto(client);
     const ready = waitForPrepared(client);
-    client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true });
+    client.startClient({ initialSyncLimit: 40, lazyLoadMembers: true, threadSupport: true });
     await ready;
     await finishLogin();
   } catch (err) {
@@ -400,6 +526,7 @@ async function finishLogin() {
   $('#auth-view').classList.add('hidden');
   $('#app-view').classList.remove('hidden');
   await refreshProfile();
+  state.client.getRooms().forEach(watchTypingMembers);
   renderRooms();
   const rooms = state.client.getRooms();
   if (rooms.length && !state.currentRoomId) {
@@ -410,6 +537,36 @@ async function finishLogin() {
 /* ════════════════════════════════════════════════════════════
    Client listeners
    ════════════════════════════════════════════════════════════ */
+function updateTypingForRoom(room) {
+  if (!room) return;
+  const ids = (room.getMembers?.() || [])
+    .filter((member) => member.typing && member.userId !== state.userId)
+    .map((member) => member.userId);
+  state.typing[room.roomId] = ids;
+  if (room.roomId === state.currentRoomId) renderTyping();
+  scheduleRooms();
+}
+
+function watchTypingMembers(room) {
+  if (!room) return;
+  const members = room.getMembers?.() || room.getJoinedMembers?.() || [];
+  for (const member of members) {
+    if (watchedTypingMembers.has(member)) continue;
+    watchedTypingMembers.add(member);
+    member.on?.('RoomMember.typing', () => updateTypingForRoom(room));
+  }
+}
+
+function watchEventUpdates(event, room) {
+  if (!event?.once) return;
+  const refresh = () => {
+    if (room.roomId === state.currentRoomId) scheduleMessages(false);
+    scheduleRooms();
+  };
+  event.once('Event.decrypted', refresh);
+  event.once('Event.replaced', refresh);
+}
+
 function attachClient(client) {
   state.client = client;
 
@@ -425,7 +582,8 @@ function attachClient(client) {
       return;
     }
 
-    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction') {
+    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction' || type === 'm.sticker') {
+      if (type === 'm.room.message' || type === 'm.room.encrypted') watchEventUpdates(event, room);
       if (room.roomId === state.currentRoomId && !toStartOfTimeline) {
         scheduleMessages(false);
       }
@@ -444,9 +602,15 @@ function attachClient(client) {
     }
   });
 
-  client.on('Room', () => scheduleRooms());
+  client.on('Room', (room) => { watchTypingMembers(room); updateTypingForRoom(room); scheduleRooms(); });
+  client.on('Room.redaction', (event, room) => {
+    if (room?.roomId === state.currentRoomId) scheduleMessages(false);
+    scheduleRooms();
+  });
   client.on('Room.myMembership', () => scheduleRooms());
   client.on('RoomState.events', (event, roomState) => {
+    const room = roomState?.roomId ? client.getRoom(roomState.roomId) : null;
+    if (room) watchTypingMembers(room);
     if (roomState?.roomId === state.currentRoomId) renderRoomHeader();
     scheduleRooms();
   });
@@ -531,19 +695,22 @@ function roomPreview(room) {
   }
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev.getType() === 'm.reaction') continue;
-    if (ev.getType() === 'm.room.encrypted') {
+    const type = ev.getType();
+    if (type === 'm.reaction') continue;
+    const content = ev.getContent() || {};
+    if (type === 'm.room.encrypted' && !content.msgtype) {
       return { text: 'Зашифрованное сообщение', ts: ev.getTs(), own: false };
     }
-    if (ev.getType() !== 'm.room.message') continue;
-    const content = ev.getContent() || {};
+    if (type !== 'm.room.message' && type !== 'm.room.encrypted') continue;
     if (content['m.relates_to']?.rel_type === 'm.replace') continue;
     let text = edits.get(ev.getId())?.body || content.body || '';
     if (content.msgtype === 'm.image') text = 'Фото';
+    else if (type === 'm.sticker' || content.msgtype === 'm.sticker') text = 'Стикер';
     else if (content.msgtype === 'm.file') text = 'Файл';
-    else if (content.msgtype === 'm.audio') text = 'Аудио';
+    else if (content.msgtype === 'm.audio') text = content['org.matrix.msc3245.voice'] || !content.body ? 'Голосовое сообщение' : 'Аудио';
     else if (content.msgtype === 'm.video') text = 'Видео';
     text = text.replace(/\s+/g, ' ').trim();
+    if (!text) text = 'Сообщение';
     if (text.length > 90) text = text.slice(0, 90) + '…';
     return { text, ts: ev.getTs(), own: ev.getSender() === state.userId };
   }
@@ -569,7 +736,7 @@ function renderRooms() {
   if (state.demo) {
     rooms = state.demoRooms;
   } else {
-    rooms = state.client.getRooms().slice().sort((a, b) => {
+    rooms = clientRooms().slice().sort((a, b) => {
       return (b.getLastActiveTimestamp?.() || 0) - (a.getLastActiveTimestamp?.() || 0);
     });
   }
@@ -581,6 +748,13 @@ function renderRooms() {
   });
 
   $('#room-count').textContent = String(rooms.length);
+
+  const totalUnread = rooms.reduce((sum, room) => {
+    if (state.demo) return sum + (room.unread || 0);
+    return sum + (unreadFor(room).total || 0);
+  }, 0);
+  document.title = totalUnread ? `(${totalUnread}) mst.matrix` : 'mst.matrix — Matrix, beautifully';
+
   $('#rooms-empty').classList.toggle('hidden', visible.length !== 0);
 
   if (!visible.length) {
@@ -612,6 +786,7 @@ function renderRooms() {
       }
 
       if (typing) preview = '<span class="typing-preview">печатает…</span>';
+      else if (state.drafts[id] && id !== state.currentRoomId) preview = `<span class="draft-preview">Черновик: ${escapeHtml(state.drafts[id].replace(/\s+/g, ' ').slice(0, 70))}</span>`;
       else preview = escapeHtml(preview);
       const active = id === state.currentRoomId ? 'active' : '';
       return `
@@ -662,6 +837,8 @@ function renderRoomHeader() {
 }
 
 function selectRoom(roomId) {
+  if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
+  $$('.msg.tools-open').forEach((m) => m.classList.remove('tools-open'));
   state.currentRoomId = roomId;
   if (state.demo) state.demoRoomId = roomId;
   state.messageFilter = '';
@@ -675,7 +852,13 @@ function selectRoom(roomId) {
   closeSidebar();
   const room = getCurrentRoom();
   if (room && !state.demo) scheduleReadReceipt(room, true);
-  $('#message-input')?.focus();
+  const input = $('#message-input');
+  if (input) {
+    input.value = state.drafts[roomId] || '';
+    resizeComposer();
+    updateSendButton();
+    input.focus();
+  }
 }
 
 function showEmptyState() {
@@ -688,6 +871,10 @@ function showEmptyState() {
 /* ════════════════════════════════════════════════════════════
    Message model
    ════════════════════════════════════════════════════════════ */
+function clientRooms() {
+  return (state.client?.getRooms() || []).filter((room) => !room.isSpaceRoom?.());
+}
+
 function getCurrentRoom() {
   if (!state.currentRoomId) return null;
   if (state.demo) return state.demoRooms.find((r) => r.id === state.currentRoomId) || null;
@@ -696,7 +883,7 @@ function getCurrentRoom() {
 
 function buildTimeline(room) {
   if (state.demo) {
-    return room.messages.map((m) => ({
+    const demoMessages = room.messages.map((m) => ({
       id: m.id,
       sender: m.sender,
       senderName: m.name,
@@ -710,6 +897,19 @@ function buildTimeline(room) {
       reactions: m.reactions || {},
       encrypted: false,
     }));
+    const demoById = new Map(demoMessages.map((m) => [m.id, m]));
+    for (const m of demoMessages) {
+      const replyId = m.content?.['m.relates_to']?.['m.in_reply_to']?.event_id;
+      const target = replyId ? demoById.get(replyId) : null;
+      if (target) {
+        m.replyTo = {
+          id: replyId,
+          name: target.own ? 'Вы' : target.senderName,
+          body: messageLabel(target).replace(/\s+/g, ' ').slice(0, 140),
+        };
+      }
+    }
+    return demoMessages;
   }
 
   const events = room.timeline || [];
@@ -744,11 +944,10 @@ function buildTimeline(room) {
   const messages = [];
   for (const ev of events) {
     const type = ev.getType();
-    if (type !== 'm.room.message' && type !== 'm.room.encrypted') continue;
+    if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.sticker') continue;
     const content = ev.getContent() || {};
     const rel = content['m.relates_to'];
     if (rel?.rel_type === 'm.replace') continue;
-    if (rel?.rel_type === 'm.thread') continue;
     if (type === 'm.room.message' && !content.msgtype && !ev.isRedacted?.()) continue;
 
     let finalContent = content;
@@ -767,16 +966,31 @@ function buildTimeline(room) {
       sender: ev.getSender(),
       senderName: member?.name || ev.getSender(),
       ts: ev.getTs(),
-      msgtype: finalContent.msgtype || (type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
+      msgtype: finalContent.msgtype || (type === 'm.sticker' ? 'm.sticker' : type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
       body: finalContent.body || '',
       content: finalContent,
       own: ev.getSender() === state.userId,
       redacted: !!ev.isRedacted?.(),
       edited: !!edit,
       reactions: reactionObj,
+      threadRoot: rel?.rel_type === 'm.thread' ? rel.event_id : null,
       encrypted: type === 'm.room.encrypted',
       decryptionFailure: type === 'm.room.encrypted' && (ev.isDecryptionFailure?.() ?? true),
     });
+  }
+
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  for (const msg of messages) {
+    const replyId = msg.content?.['m.relates_to']?.['m.in_reply_to']?.event_id;
+    if (!replyId) continue;
+    const target = byId.get(replyId);
+    if (target) {
+      msg.replyTo = {
+        id: replyId,
+        name: target.own ? 'Вы' : target.senderName,
+        body: messageLabel(target).replace(/\s+/g, ' ').slice(0, 140),
+      };
+    }
   }
 
   return messages;
@@ -795,15 +1009,47 @@ function reactionChips(reactions, targetId) {
     .join('')}</div>`;
 }
 
-function fileCard(content) {
-  const url = mxcToUrl(content.url, 1200, 1200, 'scale');
+function fileCard(content, msg) {
   const name = content.body || 'Файл';
   const size = formatBytes(content.info?.size);
-  return `<a class="file-card" href="${escapeAttr(url || '#')}" target="_blank" rel="noopener noreferrer" download data-file-mxc="${escapeAttr(content.url || '')}" data-file-name="${escapeAttr(name)}">
-    <span class="file-ico">${icon('file')}</span>
-    <span class="file-meta"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(size)}</small></span>
+  const encrypted = !!content.file;
+  return `<button type="button" class="file-card" data-file-event="${escapeAttr(msg.id)}">
+    <span class="file-ico">${icon(encrypted ? 'lock' : 'file')}</span>
+    <span class="file-meta"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(size)}${encrypted ? ' · зашифровано' : ''}</small></span>
     <span class="file-dl">${icon('download')}</span>
-  </a>`;
+  </button>`;
+}
+
+function mediaPlaceholder(kind, msgId, label) {
+  return `<div class="media-placeholder" data-${kind}-event="${escapeAttr(msgId)}">
+    <span class="media-spinner"></span><span>${escapeHtml(label)}</span>
+  </div>`;
+}
+
+function audioPlayerHtml(msg) {
+  const c = msg.content || {};
+  const hasMedia = !!attachmentMxc(c);
+  const voice = !!(c['org.matrix.msc3245.voice'] || c['org.matrix.msc1767.audio']) || !c.body;
+  const label = c.body && c.body !== 'Voice message' ? c.body : (voice ? 'Голосовое сообщение' : 'Аудио');
+  const duration = c.info?.duration ? c.info.duration / 1000 : 0;
+  let seed = 0;
+  for (let i = 0; i < msg.id.length; i++) seed = (seed * 31 + msg.id.charCodeAt(i)) % 997;
+  const bars = Array.from({ length: 34 }, (_, i) => {
+    const h = 5 + ((seed + i * 13 + (i % 4) * 7) % 18);
+    return `<i style="height:${h}px"></i>`;
+  }).join('');
+  return `<div class="audio-message ${hasMedia ? '' : 'audio-unavailable'}" data-audio-event="${escapeAttr(msg.id)}">
+    <button type="button" class="audio-play" title="Воспроизвести" aria-label="Воспроизвести">${icon('play')}</button>
+    <div class="audio-center">
+      <div class="audio-wave">${bars}</div>
+      <div class="audio-info">
+        <span class="audio-label">${escapeHtml(label)}</span>
+        <span class="audio-time">${duration ? formatDuration(duration) : '0:00'}</span>
+      </div>
+    </div>
+    <button type="button" class="audio-speed" title="Скорость воспроизведения" aria-label="Скорость">1×</button>
+    <button type="button" class="audio-download" data-audio-download title="Скачать аудио" aria-label="Скачать аудио">${icon('download')}</button>
+  </div>`;
 }
 
 function messageBodyHtml(msg) {
@@ -813,19 +1059,35 @@ function messageBodyHtml(msg) {
   }
 
   const c = msg.content || {};
-  const url = c.url ? mxcToUrl(c.url, 900, 900, 'scale') : '';
+  const imageUrl = c.url ? mxcToUrl(c.url, 900, 900, 'scale') : '';
 
-  if (msg.msgtype === 'm.image' && url) {
-    const caption = c.body && !/^image/i.test(c.body) && c.body !== 'image' ? `<div class="image-caption">${escapeHtml(c.body)}</div>` : '';
-    return `<img class="msg-image" src="${escapeAttr(url)}" alt="${escapeAttr(c.body || 'Изображение')}" loading="lazy" data-action="lightbox" data-src="${escapeAttr(url)}" data-media-mxc="${escapeAttr(c.url || '')}" data-media-w="900" data-media-h="900" data-media-method="scale" />${caption}`;
+  if (msg.msgtype === 'm.image') {
+    const caption = c.body && !/^image/i.test(c.body) && c.body !== 'image'
+      ? `<div class="image-caption">${escapeHtml(c.body)}</div>`
+      : '';
+    if (c.file) return mediaPlaceholder('image', msg.id, 'Расшифровываем изображение…') + caption;
+    if (imageUrl) {
+      return `<img class="msg-image" src="${escapeAttr(imageUrl)}" alt="${escapeAttr(c.body || 'Изображение')}" loading="lazy" data-action="lightbox" data-src="${escapeAttr(imageUrl)}" data-media-mxc="${escapeAttr(c.url || '')}" data-media-w="900" data-media-h="900" data-media-method="scale" />${caption}`;
+    }
+    return mediaPlaceholder('image', msg.id, 'Изображение недоступно');
   }
-  if (msg.msgtype === 'm.file') return fileCard(c);
-  if (msg.msgtype === 'm.audio' && url) {
-    return `<audio controls preload="none" src="${escapeAttr(url)}"></audio>`;
+
+  if (msg.msgtype === 'm.sticker' || (msg.msgtype === 'm.image' && c['org.matrix.msc2545.sticker'])) {
+    const stickerUrl = c.url ? mxcToUrl(c.url, 320, 320, 'scale') : '';
+    if (stickerUrl) return `<img class="msg-image msg-sticker" src="${escapeAttr(stickerUrl)}" alt="${escapeAttr(c.body || 'Стикер')}" loading="lazy" data-action="lightbox" data-src="${escapeAttr(stickerUrl)}" />`;
   }
-  if (msg.msgtype === 'm.video' && url) {
-    return `<video controls preload="metadata" src="${escapeAttr(url)}" style="max-width:100%;border-radius:12px;"></video>`;
+  if (msg.msgtype === 'm.file') return fileCard(c, msg);
+  if (msg.msgtype === 'm.audio') return audioPlayerHtml(msg);
+
+  if (msg.msgtype === 'm.video') {
+    if (c.file) return mediaPlaceholder('video', msg.id, 'Расшифровываем видео…');
+    const videoUrl = c.url ? mxcToUrl(c.url, 1280, 720, 'scale') : '';
+    if (videoUrl) {
+      return `<video controls preload="metadata" src="${escapeAttr(videoUrl)}" class="msg-video"></video>`;
+    }
+    return mediaPlaceholder('video', msg.id, 'Видео недоступно');
   }
+
   if (msg.msgtype === 'm.emote') {
     return `<em>* ${escapeHtml(msg.senderName)} ${formatText(msg.body)}</em>`;
   }
@@ -838,10 +1100,12 @@ function messageBodyHtml(msg) {
 function messageHtml(msg, grouped) {
   const own = msg.own;
   const name = own ? 'Вы' : msg.senderName || msg.sender;
+  const saved = isBookmarked(msg.id);
   const tools = `
     <div class="msg-tools">
       <button class="icon-btn" data-action="reply" data-event="${escapeAttr(msg.id)}" title="Ответить">${icon('reply')}</button>
       <button class="icon-btn" data-action="react" data-event="${escapeAttr(msg.id)}" title="Реакция">${icon('smile')}</button>
+      <button class="icon-btn ${saved ? 'is-saved' : ''}" data-action="bookmark" data-event="${escapeAttr(msg.id)}" title="${saved ? 'Убрать из сохранённых' : 'Сохранить'}">${icon(saved ? 'bookmark-filled' : 'bookmark')}</button>
       ${own ? `<button class="icon-btn" data-action="edit" data-event="${escapeAttr(msg.id)}" title="Изменить">${icon('edit')}</button>` : ''}
       ${own ? `<button class="icon-btn" data-action="delete" data-event="${escapeAttr(msg.id)}" title="Удалить">${icon('trash')}</button>` : ''}
       <button class="icon-btn" data-action="copy" data-event="${escapeAttr(msg.id)}" title="Копировать">${icon('copy')}</button>
@@ -852,13 +1116,46 @@ function messageHtml(msg, grouped) {
     <div class="msg-main">
       <div class="msg-head">
         <span class="msg-sender">${escapeHtml(name)}</span>
+        ${msg.threadRoot ? '<span class="thread-tag">ветка</span>' : ''}
         <span class="msg-time">${formatTime(msg.ts)}${msg.edited ? ' · изм.' : ''}</span>
       </div>
-      <div class="bubble">${messageBodyHtml(msg)}</div>
+      <div class="bubble">
+        ${msg.replyTo ? `<button type="button" class="reply-quote" data-action="jump-reply" data-event="${escapeAttr(msg.replyTo.id)}">
+          <strong>${escapeHtml(msg.replyTo.name)}</strong><small>${escapeHtml(msg.replyTo.body)}</small>
+        </button>` : ''}
+        ${messageBodyHtml(msg)}
+      </div>
       ${reactionChips(msg.reactions, msg.id)}
       ${tools}
     </div>
   </div>`;
+}
+
+async function loadOlderMessages() {
+  if (state.demo || state.loadingOlder || !state.client || !state.currentRoomId) return;
+  const room = state.client.getRoom(state.currentRoomId);
+  const timeline = room?.getLiveTimeline?.();
+  if (!timeline) return;
+  const backwards = matrixcs.EventTimeline?.BACKWARDS || 'b';
+  const token = timeline.getPaginationToken?.(backwards);
+  if (!token) return;
+
+  const scroll = $('#message-scroll');
+  const oldHeight = scroll?.scrollHeight || 0;
+  const oldTop = scroll?.scrollTop || 0;
+  state.loadingOlder = true;
+  try {
+    await state.client.scrollback(room, 50);
+    renderMessages(false);
+    requestAnimationFrame(() => {
+      if (!scroll) return;
+      scroll.scrollTop = scroll.scrollHeight - oldHeight + oldTop;
+    });
+  } catch (err) {
+    console.warn('Scrollback failed', err);
+  } finally {
+    state.loadingOlder = false;
+  }
 }
 
 function renderMessages(forceBottom = false) {
@@ -870,7 +1167,10 @@ function renderMessages(forceBottom = false) {
   if (!scroll || !messagesEl) return;
 
   const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 140;
-  let messages = buildTimeline(room);
+  const allMessages = buildTimeline(room);
+  state.messageContent.clear();
+  for (const m of allMessages) state.messageContent.set(m.id, m.content);
+  let messages = allMessages;
   if (state.messageFilter) {
     const q = state.messageFilter.toLowerCase();
     messages = messages.filter((m) => `${m.body || ''} ${m.senderName || ''}`.toLowerCase().includes(q));
@@ -900,6 +1200,7 @@ function renderMessages(forceBottom = false) {
   }
 
   messagesEl.innerHTML = html;
+  hydrateMedia();
 
   if (forceBottom || nearBottom) {
     requestAnimationFrame(() => {
@@ -908,9 +1209,163 @@ function renderMessages(forceBottom = false) {
   }
 
   if (!state.demo) {
-    const last = [...(room.timeline || [])].reverse().find((e) => e.getType() === 'm.room.message');
+    const last = [...(room.timeline || [])].reverse().find((e) => e.getType() === 'm.room.message' || e.getType() === 'm.room.encrypted');
     if (last) scheduleReadReceipt(room);
   }
+}
+
+/* ════════════════════════════════════════════════════════════
+   Media hydration: encrypted images, video, audio
+   ════════════════════════════════════════════════════════════ */
+function hydrateMedia() {
+  hydrateAudioPlayers();
+  hydrateImageMessages();
+  hydrateVideoMessages();
+}
+
+function hydrateImageMessages() {
+  $$('.media-placeholder[data-image-event]').forEach(async (el) => {
+    const id = el.dataset.imageEvent;
+    const content = state.messageContent.get(id);
+    if (!content) return;
+    try {
+      const url = await resolveAttachmentUrl(content);
+      const img = document.createElement('img');
+      img.className = 'msg-image';
+      img.src = url;
+      img.alt = content.body || 'Изображение';
+      img.loading = 'lazy';
+      img.dataset.action = 'lightbox';
+      img.dataset.src = url;
+      el.replaceWith(img);
+    } catch (err) {
+      console.warn('Image decrypt failed', err);
+      el.classList.add('media-failed');
+      el.innerHTML = `${icon('alert')}<span>Не удалось расшифровать изображение</span>`;
+    }
+  });
+}
+
+function hydrateVideoMessages() {
+  $$('.media-placeholder[data-video-event]').forEach(async (el) => {
+    const id = el.dataset.videoEvent;
+    const content = state.messageContent.get(id);
+    if (!content) return;
+    try {
+      const url = await resolveAttachmentUrl(content);
+      const video = document.createElement('video');
+      video.className = 'msg-video';
+      video.controls = true;
+      video.preload = 'metadata';
+      video.src = url;
+      el.replaceWith(video);
+    } catch (err) {
+      console.warn('Video decrypt failed', err);
+      el.classList.add('media-failed');
+      el.innerHTML = `${icon('alert')}<span>Не удалось расшифровать видео</span>`;
+    }
+  });
+}
+
+function hydrateAudioPlayers() {
+  $$('.audio-message[data-audio-event]').forEach(async (el) => {
+    if (el.dataset.audioReady === '1' || el.dataset.audioReady === 'loading') return;
+    el.dataset.audioReady = 'loading';
+    const id = el.dataset.audioEvent;
+    const content = state.messageContent.get(id);
+    if (!content) {
+      el.dataset.audioReady = 'error';
+      return;
+    }
+
+    const playBtn = el.querySelector('.audio-play');
+    const timeEl = el.querySelector('.audio-time');
+    const wave = el.querySelector('.audio-wave');
+    const bars = [...el.querySelectorAll('.audio-wave i')];
+    const hintDuration = content.info?.duration ? content.info.duration / 1000 : 0;
+
+    try {
+      const url = await resolveAttachmentUrl(content);
+      const audio = document.createElement('audio');
+      audio.preload = 'metadata';
+      audio.src = url;
+      audio.style.display = 'none';
+      el.appendChild(audio);
+
+      const setProgress = () => {
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : hintDuration;
+        if (duration > 0) {
+          const progress = Math.min(1, audio.currentTime / duration);
+          bars.forEach((bar, i) => bar.classList.toggle('passed', i / bars.length <= progress));
+          timeEl.textContent = formatDuration(audio.currentTime);
+        }
+      };
+
+      audio.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          timeEl.textContent = formatDuration(audio.duration);
+        }
+        el.classList.add('audio-ready');
+      });
+      audio.addEventListener('timeupdate', setProgress);
+      audio.addEventListener('play', () => {
+        setIcon(playBtn, 'pause');
+        el.classList.add('playing');
+      });
+      audio.addEventListener('pause', () => {
+        setIcon(playBtn, 'play');
+        el.classList.remove('playing');
+      });
+      audio.addEventListener('ended', () => {
+        setIcon(playBtn, 'play');
+        el.classList.remove('playing');
+        audio.currentTime = 0;
+        bars.forEach((bar) => bar.classList.remove('passed'));
+        timeEl.textContent = hintDuration ? formatDuration(hintDuration) : '0:00';
+      });
+      audio.addEventListener('error', () => {
+        el.dataset.audioReady = 'error';
+        el.classList.add('audio-unavailable');
+        timeEl.textContent = 'недоступно';
+      });
+
+      playBtn.addEventListener('click', () => {
+        if (audio.paused) audio.play().catch(() => {});
+        else audio.pause();
+      });
+
+      if (wave) {
+        wave.style.cursor = 'pointer';
+        wave.addEventListener('click', (e) => {
+          const rect = wave.getBoundingClientRect();
+          const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+          const duration = audio.duration || hintDuration;
+          if (duration > 0) audio.currentTime = ratio * duration;
+        });
+      }
+
+      const speedBtn = el.querySelector('.audio-speed');
+      if (speedBtn) {
+        speedBtn.addEventListener('click', () => {
+          const rates = [1, 1.5, 2];
+          const idx = rates.indexOf(audio.playbackRate);
+          audio.playbackRate = rates[(idx + 1) % rates.length];
+          speedBtn.textContent = `${audio.playbackRate}×`;
+        });
+      }
+
+      if (hintDuration) timeEl.textContent = formatDuration(hintDuration);
+      el.dataset.audioReady = '1';
+      el.classList.add('audio-ready');
+    } catch (err) {
+      console.warn('Audio load failed', err);
+      el.dataset.audioReady = 'error';
+      el.classList.add('audio-unavailable');
+      if (timeEl) timeEl.textContent = 'недоступно';
+      if (playBtn) playBtn.disabled = true;
+      if (wave) wave.classList.add('wave-failed');
+    }
+  });
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -936,7 +1391,7 @@ function scheduleReadReceipt(room, immediate = false) {
   if (!room || state.demo || !state.client) return;
   const roomId = room.roomId;
   const send = () => {
-    const events = (room.timeline || []).filter((e) => e.getType() === 'm.room.message');
+    const events = (room.timeline || []).filter((e) => e.getType() === 'm.room.message' || e.getType() === 'm.room.encrypted');
     const last = events[events.length - 1];
     if (!last) return;
     state.client.sendReadReceipt(last).catch(() => {});
@@ -982,31 +1437,6 @@ async function loadAuthenticatedMedia(img) {
     img.src = objectUrl;
   } catch (err) {
     console.warn('Authenticated media failed', err);
-  }
-}
-
-async function downloadAuthenticatedFile(link) {
-  const mxc = link?.dataset.fileMxc;
-  if (!mxc || !state.client || state.demo) return false;
-  try {
-    const url = state.client.mxcUrlToHttp(mxc, undefined, undefined, undefined, true, true, true);
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${state.client.getAccessToken()}` },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = link.dataset.fileName || 'file';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-    return true;
-  } catch (err) {
-    console.warn('File download failed', err);
-    return false;
   }
 }
 
@@ -1098,6 +1528,66 @@ function updateSendButton() {
   btn.disabled = !ta.value.trim() && state.pendingFiles.length === 0;
 }
 
+function roomIsEncrypted(roomId) {
+  try {
+    const room = state.client?.getRoom(roomId);
+    return !!(state.client?.isRoomEncrypted?.(roomId) || room?.hasEncryptionStateEvent?.());
+  } catch {
+    return false;
+  }
+}
+
+async function sendAttachment(file, msgtype, extra = {}) {
+  const roomId = state.currentRoomId;
+  const encryptedRoom = roomIsEncrypted(roomId);
+  let uploadSource = file;
+  let fileInfo = null;
+
+  if (encryptedRoom) {
+    if (!state.client.getCrypto?.()) throw new Error('Шифрование комнаты недоступно на этом устройстве');
+    const plaintext = await file.arrayBuffer();
+    const encrypted = await encryptAttachment(plaintext);
+    fileInfo = encrypted.info;
+    uploadSource = new Blob([encrypted.data], { type: 'application/octet-stream' });
+  }
+
+  const upload = await state.client.uploadContent(uploadSource, {
+    name: encryptedRoom ? undefined : file.name,
+    type: encryptedRoom ? 'application/octet-stream' : (file.type || 'application/octet-stream'),
+    includeFilename: !encryptedRoom,
+  });
+  const mxc = upload?.content_uri || upload;
+  const info = {
+    mimetype: file.type || 'application/octet-stream',
+    size: file.size,
+    ...(extra.info || {}),
+  };
+
+  if (msgtype === 'm.image') {
+    const dims = await imageSize(file).catch(() => null);
+    if (dims) Object.assign(info, { w: dims.w, h: dims.h });
+  }
+
+  const content = {
+    msgtype,
+    body: extra.body || file.name,
+    info,
+  };
+
+  if (fileInfo) {
+    fileInfo.url = mxc;
+    content.file = fileInfo;
+  } else {
+    content.url = mxc;
+  }
+
+  if (extra.voice) content['org.matrix.msc3245.voice'] = {};
+  if (extra.relation) content['m.relates_to'] = extra.relation;
+
+  await state.client.sendEvent(roomId, 'm.room.message', content);
+  return content;
+}
+
 async function sendMessage() {
   const input = $('#message-input');
   const text = input.value.trim();
@@ -1110,6 +1600,8 @@ async function sendMessage() {
   renderReplyBanner();
 
   input.value = '';
+  delete state.drafts[state.currentRoomId];
+  saveDrafts();
   resizeComposer();
   state.pendingFiles = [];
   renderFilePreview();
@@ -1118,6 +1610,8 @@ async function sendMessage() {
 
   if (state.demo) {
     const room = getCurrentRoom();
+    const demoContent = { msgtype: 'm.text', body: text };
+    if (replyId) demoContent['m.relates_to'] = { 'm.in_reply_to': { event_id: replyId } };
     room.messages.push({
       id: `demo-${Date.now()}`,
       sender: '@you:matrix.org',
@@ -1127,6 +1621,7 @@ async function sendMessage() {
       msgtype: 'm.text',
       isOwn: true,
       reactions: {},
+      content: demoContent,
     });
     renderMessages(true);
     renderRooms();
@@ -1141,25 +1636,12 @@ async function sendMessage() {
     }
 
     for (const file of files) {
-      const upload = await state.client.uploadContent(file, { name: file.name, type: file.type });
-      const contentUri = upload?.content_uri || upload;
       const mime = file.type || 'application/octet-stream';
       let msgtype = 'm.file';
       if (mime.startsWith('image/')) msgtype = 'm.image';
       else if (mime.startsWith('audio/')) msgtype = 'm.audio';
       else if (mime.startsWith('video/')) msgtype = 'm.video';
-
-      const content = {
-        msgtype,
-        body: file.name,
-        url: contentUri,
-        info: { mimetype: mime, size: file.size },
-      };
-      if (msgtype === 'm.image') {
-        const dims = await imageSize(file).catch(() => null);
-        if (dims) content.info.w = dims.w, content.info.h = dims.h;
-      }
-      await state.client.sendEvent(state.currentRoomId, 'm.room.message', content);
+      await sendAttachment(file, msgtype, { body: file.name });
     }
 
     renderMessages(true);
@@ -1168,6 +1650,149 @@ async function sendMessage() {
     toast(`Не удалось отправить: ${err?.message || 'ошибка'}`, 'error');
     input.value = text;
     resizeComposer();
+  }
+}
+
+function voiceSupported() {
+  return !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+}
+
+function showVoiceUI() {
+  const bar = $('#voice-recording');
+  if (bar) bar.classList.remove('hidden');
+  document.body.classList.add('voice-active');
+  $('#voice-btn')?.classList.add('recording');
+  $('.composer')?.classList.add('recording');
+}
+
+function hideVoiceUI() {
+  const bar = $('#voice-recording');
+  if (bar) bar.classList.add('hidden');
+  document.body.classList.remove('voice-active');
+  $('#voice-btn')?.classList.remove('recording');
+  $('.composer')?.classList.remove('recording');
+  setIcon($('#voice-btn'), 'mic');
+}
+
+async function toggleVoiceRecording() {
+  if (!state.currentRoomId) {
+    toast('Сначала выберите чат', 'info');
+    return;
+  }
+  if (!voiceSupported()) {
+    toast('Запись голоса не поддерживается этим браузером', 'error');
+    return;
+  }
+  if (state.voice.recorder && state.voice.recorder.state === 'recording') {
+    finishVoiceRecording(true);
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+    let mime = '';
+    for (const candidate of candidates) {
+      try {
+        if (MediaRecorder.isTypeSupported(candidate)) { mime = candidate; break; }
+      } catch {}
+    }
+    const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const session = {
+      recorder,
+      stream,
+      chunks: [],
+      startTs: Date.now(),
+      timer: null,
+      cancel: false,
+    };
+    state.voice = session;
+
+    recorder.addEventListener('dataavailable', (e) => {
+      if (e.data && e.data.size) session.chunks.push(e.data);
+    });
+
+    recorder.addEventListener('stop', async () => {
+      clearInterval(session.timer);
+      session.stream.getTracks().forEach((track) => track.stop());
+      const duration = Date.now() - session.startTs;
+      const blob = new Blob(session.chunks, { type: recorder.mimeType || 'audio/webm' });
+      const cancelled = session.cancel;
+      state.voice = { recorder: null, stream: null, chunks: [], startTs: 0, timer: null, cancel: false };
+      hideVoiceUI();
+      if (cancelled || !blob.size || duration < 300) return;
+      await sendVoiceMessage(blob, duration);
+    });
+
+    recorder.start(250);
+    showVoiceUI();
+    setIcon($('#voice-btn'), 'mic-off');
+    session.timer = setInterval(() => {
+      const timer = $('#voice-timer');
+      if (timer) timer.textContent = formatDuration((Date.now() - session.startTs) / 1000);
+    }, 250);
+    const timer = $('#voice-timer');
+    if (timer) timer.textContent = '0:00';
+  } catch (err) {
+    console.warn('Microphone error', err);
+    toast('Не удалось получить доступ к микрофону', 'error');
+    state.voice = { recorder: null, stream: null, chunks: [], startTs: 0, timer: null, cancel: false };
+    hideVoiceUI();
+  }
+}
+
+function finishVoiceRecording(send = true) {
+  const recorder = state.voice.recorder;
+  if (!recorder) return;
+  state.voice.cancel = !send;
+  try {
+    recorder.stop();
+  } catch {
+    hideVoiceUI();
+  }
+}
+
+async function sendVoiceMessage(blob, duration) {
+  if (!state.currentRoomId) return;
+  const mime = blob.type || 'audio/webm';
+  const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+  const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mime });
+
+  if (state.demo) {
+    const room = getCurrentRoom();
+    const url = URL.createObjectURL(blob);
+    room.messages.push({
+      id: `demo-voice-${Date.now()}`,
+      sender: '@you:matrix.org',
+      name: state.profile.displayName || 'Вы',
+      ts: Date.now(),
+      body: 'Голосовое сообщение',
+      msgtype: 'm.audio',
+      isOwn: true,
+      reactions: {},
+      content: {
+        msgtype: 'm.audio',
+        body: 'Голосовое сообщение',
+        url,
+        info: { mimetype: mime, size: blob.size, duration },
+        'org.matrix.msc3245.voice': {},
+      },
+    });
+    renderMessages(true);
+    renderRooms();
+    return;
+  }
+
+  try {
+    await sendAttachment(file, 'm.audio', {
+      body: 'Голосовое сообщение',
+      voice: true,
+      info: { duration },
+    });
+    renderMessages(true);
+  } catch (err) {
+    console.error(err);
+    toast('Не удалось отправить голосовое сообщение', 'error');
   }
 }
 
@@ -1226,6 +1851,79 @@ function findMessage(eventId) {
   const room = getCurrentRoom();
   if (!room) return null;
   return buildTimeline(room).find((m) => m.id === eventId) || null;
+}
+
+function isBookmarked(eventId) {
+  return state.bookmarks.some((b) => b.id === eventId && b.roomId === state.currentRoomId);
+}
+
+function messageLabel(msg) {
+  if (!msg) return 'Сообщение';
+  if (msg.body) return msg.body;
+  if (msg.msgtype === 'm.image') return 'Изображение';
+  if (msg.msgtype === 'm.audio') return 'Аудио';
+  if (msg.msgtype === 'm.video') return 'Видео';
+  if (msg.msgtype === 'm.file') return 'Файл';
+  return 'Сообщение';
+}
+
+function toggleBookmark(msg) {
+  if (!msg || !state.currentRoomId) return;
+  const idx = state.bookmarks.findIndex((b) => b.id === msg.id && b.roomId === state.currentRoomId);
+  if (idx >= 0) {
+    state.bookmarks.splice(idx, 1);
+    toast('Убрано из сохранённых', 'info', 1800);
+  } else {
+    const room = getCurrentRoom();
+    state.bookmarks.unshift({
+      id: msg.id,
+      roomId: state.currentRoomId,
+      roomName: state.demo ? room.name : roomName(room),
+      sender: msg.own ? 'Вы' : (msg.senderName || msg.sender),
+      body: messageLabel(msg).slice(0, 600),
+      ts: msg.ts,
+      savedAt: Date.now(),
+    });
+    toast('Сохранено в избранное', 'success', 1800);
+  }
+  saveBookmarks();
+  renderMessages(false);
+}
+
+function openBookmarks() {
+  const body = $('#bookmarks-body');
+  if (!body) return;
+  const list = [...state.bookmarks].sort((a, b) => b.savedAt - a.savedAt);
+  if (!list.length) {
+    body.innerHTML = `<div class="bookmark-empty">${icon('bookmark')}<p style="margin-top:10px;">Пока пусто. Наведите на сообщение и нажмите на закладку, чтобы сохранить его здесь.</p></div>`;
+  } else {
+    body.innerHTML = list.map((b) => `
+      <div class="bookmark-item">
+        <button class="bookmark-main" data-bookmark-jump="${escapeAttr(b.id)}" data-bookmark-room="${escapeAttr(b.roomId)}" style="border:0;background:transparent;text-align:left;padding:0;">
+          <strong>${escapeHtml(b.roomName || 'Комната')} · ${escapeHtml(b.sender || '')}</strong>
+          <p>${escapeHtml(b.body || '')}</p>
+          <small>${formatDateLabel(b.ts)} · ${formatTime(b.ts)}</small>
+        </button>
+        <button class="icon-btn bookmark-del" data-bookmark-delete="${escapeAttr(b.id)}" data-bookmark-room="${escapeAttr(b.roomId)}" title="Удалить">${icon('trash')}</button>
+      </div>`).join('');
+  }
+  openModal('bookmarks-modal');
+}
+
+function jumpToBookmark(id, roomId) {
+  closeModals();
+  if (roomId && roomId !== state.currentRoomId) selectRoom(roomId);
+  setTimeout(() => {
+    const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/"/g, '\\"');
+    const el = document.querySelector(`.msg[data-event-id="${escaped}"]`);
+    if (!el) {
+      toast('Сообщение не найдено в загруженной истории', 'info');
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('msg-highlight');
+    setTimeout(() => el.classList.remove('msg-highlight'), 2200);
+  }, 380);
 }
 
 function openPrompt(title, label, value = '', confirmText = 'Сохранить', multiline = false) {
@@ -1329,6 +2027,11 @@ async function handleMessageAction(action, eventId, el) {
     return;
   }
 
+  if (action === 'bookmark') {
+    toggleBookmark(msg);
+    return;
+  }
+
   if (action === 'edit') {
     if (!msg.own) return;
     const newText = await openPrompt('Изменить сообщение', 'Новый текст', msg.body, 'Сохранить', true);
@@ -1368,7 +2071,7 @@ async function handleMessageAction(action, eventId, el) {
       return;
     }
     try {
-      await state.client.redactEvent(roomId, msg.id, {});
+      await state.client.redactEvent(roomId, msg.id);
       renderMessages(false);
       scheduleRooms();
       toast('Сообщение удалено', 'success', 1800);
@@ -1397,7 +2100,7 @@ async function toggleReaction(key, targetId, reactionEventId) {
 
   try {
     if (reactionEventId) {
-      await state.client.redactEvent(state.currentRoomId, reactionEventId, {});
+      await state.client.redactEvent(state.currentRoomId, reactionEventId);
     } else {
       await state.client.sendEvent(state.currentRoomId, 'm.reaction', {
         'm.relates_to': { rel_type: 'm.annotation', event_id: targetId, key },
@@ -1511,6 +2214,53 @@ async function createRoom() {
   }
 }
 
+async function startDM() {
+  let userId = $('#dm-user').value.trim();
+  const error = $('#new-room-error');
+  error.textContent = '';
+  if (!userId) {
+    error.textContent = 'Введите Matrix ID пользователя.';
+    return;
+  }
+  if (!userId.startsWith('@')) userId = '@' + userId;
+  if (!userId.includes(':')) {
+    error.textContent = 'Укажите полный Matrix ID, например @user:matrix.org.';
+    return;
+  }
+
+  if (state.demo) {
+    const name = userId.replace(/^@/, '').split(':')[0];
+    const room = {
+      id: `!dm-${Date.now()}:matrix.org`,
+      name,
+      topic: 'Личные сообщения',
+      unread: 0,
+      members: [{ name: state.profile.displayName || 'Вы', id: '@you:matrix.org', power: 0 }, { name, id: userId, power: 0 }],
+      messages: [],
+    };
+    state.demoRooms.unshift(room);
+    closeModals();
+    renderRooms();
+    selectRoom(room.id);
+    return;
+  }
+
+  try {
+    const roomId = await state.client.createRoom({
+      is_direct: true,
+      invite: [userId],
+      preset: matrixcs.Preset?.TrustedPrivateChat || 'trusted_private_chat',
+    });
+    closeModals();
+    $('#dm-user').value = '';
+    renderRooms();
+    selectRoom(roomId);
+    toast('Личная переписка создана', 'success');
+  } catch (err) {
+    error.textContent = err?.message || 'Не удалось создать личную переписку.';
+  }
+}
+
 async function joinRoom() {
   const value = $('#join-room-id').value.trim();
   const error = $('#new-room-error');
@@ -1590,6 +2340,14 @@ function openSettings() {
       '<span id="settings-avatar" class="avatar avatar-56"'
     );
   }
+  const status = $('#client-status');
+  if (status) {
+    status.textContent = state.demo
+      ? 'Демо-режим · данные не отправляются на сервер'
+      : state.client?.getCrypto?.()
+        ? 'End-to-end шифрование активно'
+        : 'E2EE недоступно в этом браузере — encrypted-комнаты могут не расшифровываться';
+  }
   applyTheme();
   applyAccent();
   $('#sound-toggle').checked = state.prefs.sound;
@@ -1599,6 +2357,10 @@ function openSettings() {
 
 function openNewRoom() {
   $('#new-room-error').textContent = '';
+  $$('#new-room-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'create'));
+  $('#tab-create').classList.remove('hidden');
+  $('#tab-join').classList.add('hidden');
+  $('#tab-dm').classList.add('hidden');
   openModal('new-room-modal');
 }
 
@@ -1619,6 +2381,8 @@ function openRoomInfo() {
       </div>
       <div class="member-list">${room.members.map((m) => `
         <div class="member-row">${avatarHtml(m.name)}<span>${escapeHtml(m.name)}</span><small>${m.power >= 100 ? 'Админ' : ''}</small></div>`).join('')}</div>
+      <div class="settings-label">Пригласить пользователя</div>
+      <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
       <button class="btn btn-danger-soft btn-block" style="margin-top:16px;" data-leave-room="${escapeAttr(room.id)}">${icon('logout')} Покинуть комнату</button>`;
   } else {
     const name = roomName(room);
@@ -1644,6 +2408,8 @@ function openRoomInfo() {
           <div class="member-row">${avatarHtml(m.name, m.getAvatarUrl?.(state.client.getHomeserverUrl(), 64, 64, 'crop'))}
           <span>${escapeHtml(m.name)}${m.userId === state.userId ? ' (вы)' : ''}</span><small>${m.powerLevel >= 100 ? 'Админ' : ''}</small></div>`).join('')}
       </div>
+      <div class="settings-label">Пригласить пользователя</div>
+      <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
       ${canLeave ? `<button class="btn btn-danger-soft btn-block" style="margin-top:16px;" data-leave-room="${escapeAttr(room.roomId)}">${icon('logout')} Покинуть комнату</button>` : ''}`;
   }
   openModal('room-info-modal');
@@ -1652,8 +2418,8 @@ function openRoomInfo() {
 function openProfileModal() {
   const name = state.profile.displayName || 'Вы';
   const id = state.userId || '@you:matrix.org';
-  const rooms = state.demo ? state.demoRooms.length : (state.client?.getRooms()?.length || 0);
-  const joinedRooms = state.demo ? rooms : (state.client?.getRooms()?.filter((r) => r.getMyMembership?.() === 'join').length || 0);
+  const rooms = state.demo ? state.demoRooms.length : clientRooms().length;
+  const joinedRooms = state.demo ? rooms : clientRooms().filter((r) => r.getMyMembership?.() === 'join').length;
   $('#profile-body').innerHTML = `
     <div class="profile-hero">
       ${avatarHtml(name, state.profile.avatarUrl, 'avatar-72')}
@@ -1679,6 +2445,214 @@ function openProfileModal() {
       toast('Не удалось скопировать', 'error');
     }
   });
+}
+
+/* ════════════════════════════════════════════════════════════
+   Command palette, focus mode, recap
+   ════════════════════════════════════════════════════════════ */
+function commandRooms() {
+  if (state.demo) {
+    return state.demoRooms.map((room) => ({
+      icon: 'hash',
+      title: room.name,
+      subtitle: 'Перейти в комнату',
+      keywords: room.name,
+      run: () => selectRoom(room.id),
+    }));
+  }
+  return clientRooms().map((room) => ({
+    icon: 'hash',
+    title: roomName(room),
+    subtitle: room.getTopic?.() || 'Перейти в комнату',
+    keywords: `${roomName(room)} ${room.roomId}`,
+    run: () => selectRoom(room.roomId),
+  }));
+}
+
+function allCommands() {
+  return [
+    {
+      icon: 'message-plus',
+      title: 'Новая комната',
+      subtitle: 'Создать комнату или войти по адресу',
+      keywords: 'создать новую комнату join',
+      run: openNewRoom,
+    },
+    {
+      icon: 'bookmark',
+      title: 'Сохранённые сообщения',
+      subtitle: 'Локальное избранное',
+      keywords: 'закладки избранное saved',
+      run: openBookmarks,
+    },
+    {
+      icon: 'sparkles',
+      title: 'Сводка непрочитанного',
+      subtitle: 'Быстрый обзор активных комнат',
+      keywords: 'recap сводка непрочитанное',
+      run: openRecap,
+    },
+    {
+      icon: 'focus',
+      title: state.focusMode ? 'Выйти из режима фокуса' : 'Режим фокуса',
+      subtitle: 'Скрыть всё лишнее и сосредоточиться на переписке',
+      keywords: 'focus фокус zen',
+      run: toggleFocusMode,
+    },
+    {
+      icon: 'settings',
+      title: 'Настройки',
+      subtitle: 'Тема, акценты, уведомления',
+      keywords: 'настройки theme',
+      run: openSettings,
+    },
+    {
+      icon: 'moon',
+      title: 'Тёмная тема',
+      subtitle: 'Включить тёмное оформление',
+      keywords: 'dark theme ночь',
+      run: () => { state.prefs.theme = 'dark'; applyTheme(); savePrefs(); },
+    },
+    {
+      icon: 'sun',
+      title: 'Светлая тема',
+      subtitle: 'Включить светлое оформление',
+      keywords: 'light theme день',
+      run: () => { state.prefs.theme = 'light'; applyTheme(); savePrefs(); },
+    },
+    {
+      icon: 'at',
+      title: 'Мой профиль',
+      subtitle: state.userId || 'Matrix ID',
+      keywords: 'профиль аккаунт',
+      run: openProfileModal,
+    },
+    {
+      icon: 'logout',
+      title: 'Выйти из аккаунта',
+      subtitle: 'Завершить сессию на этом устройстве',
+      keywords: 'logout выход',
+      run: logout,
+    },
+    ...commandRooms(),
+  ];
+}
+
+function openCommandPalette() {
+  const palette = $('#command-palette');
+  if (!palette) return;
+  palette.classList.remove('hidden');
+  const input = $('#command-input');
+  if (input) {
+    input.value = '';
+    renderCommands('');
+    setTimeout(() => input.focus(), 30);
+  }
+}
+
+function closeCommandPalette() {
+  $('#command-palette')?.classList.add('hidden');
+}
+
+function renderCommands(query = '') {
+  const q = query.trim().toLowerCase();
+  const items = allCommands().filter((cmd) => {
+    if (!q) return true;
+    return `${cmd.title} ${cmd.subtitle || ''} ${cmd.keywords || ''}`.toLowerCase().includes(q);
+  }).slice(0, 30);
+
+  state.commandItems = items;
+  state.commandIndex = 0;
+
+  const results = $('#command-results');
+  if (!results) return;
+  if (!items.length) {
+    results.innerHTML = '<div class="command-empty">Ничего не найдено</div>';
+    return;
+  }
+  results.innerHTML = items.map((cmd, i) => `
+    <button class="command-item ${i === 0 ? 'active' : ''}" data-command-index="${i}">
+      <span class="cmd-ico">${icon(cmd.icon || 'command')}</span>
+      <span class="cmd-text"><strong>${escapeHtml(cmd.title)}</strong><small>${escapeHtml(cmd.subtitle || '')}</small></span>
+    </button>`).join('');
+}
+
+function selectCommand(index) {
+  const item = state.commandItems[index];
+  if (!item) return;
+  closeCommandPalette();
+  setTimeout(() => item.run(), 20);
+}
+
+function moveCommand(delta) {
+  if (!state.commandItems.length) return;
+  state.commandIndex = (state.commandIndex + delta + state.commandItems.length) % state.commandItems.length;
+  $$('#command-results .command-item').forEach((el, i) => el.classList.toggle('active', i === state.commandIndex));
+  $('#command-results .command-item.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function enterFocusMode() {
+  state.focusMode = true;
+  $('#app-view')?.classList.add('focus-mode');
+  $('#focus-exit')?.classList.remove('hidden');
+  closeSidebar();
+}
+
+function exitFocusMode() {
+  if (!state.focusMode) return;
+  state.focusMode = false;
+  $('#app-view')?.classList.remove('focus-mode');
+  $('#focus-exit')?.classList.add('hidden');
+}
+
+function toggleFocusMode() {
+  if (state.focusMode) exitFocusMode();
+  else enterFocusMode();
+}
+
+function openRecap() {
+  const rows = [];
+  if (state.demo) {
+    for (const room of state.demoRooms) {
+      if (!room.unread) continue;
+      const last = room.messages[room.messages.length - 1];
+      rows.push({
+        id: room.id,
+        name: room.name,
+        count: room.unread,
+        text: last ? last.body : 'Нет сообщений',
+        time: last ? formatListTime(last.ts) : '',
+      });
+    }
+  } else {
+    for (const room of clientRooms()) {
+      const unread = unreadFor(room);
+      if (!unread.total) continue;
+      const p = roomPreview(room);
+      rows.push({
+        id: room.roomId,
+        name: roomName(room),
+        count: unread.total,
+        text: p.text,
+        time: formatListTime(p.ts),
+      });
+    }
+  }
+
+  const body = $('#recap-body');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = `<div class="bookmark-empty">${icon('check-check')}<p style="margin-top:10px;">Всё прочитано — непрочитанных комнат нет.</p></div>`;
+  } else {
+    rows.sort((a, b) => b.count - a.count);
+    body.innerHTML = rows.map((r) => `
+      <button class="recap-room" data-recap-room="${escapeAttr(r.id)}" style="border:0;background:transparent;text-align:left;width:100%;">
+        ${avatarHtml(r.name)}
+        <span class="recap-main"><strong>${escapeHtml(r.name)}</strong><small>${escapeHtml(r.time)}</small><p>${escapeHtml(r.text)}</p></span>
+        <span class="recap-badge">${r.count > 99 ? '99+' : r.count}</span>
+      </button>`).join('');
+  }
+  openModal('recap-modal');
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -1717,6 +2691,7 @@ function buildDemoData() {
         { id: 'd2', sender: '@max:matrix.org', name: 'Максим Волков', ts: now - 2 * day + 4 * min, body: 'Круто! Особенно нравится, как получились пузыри сообщений и цветовая система.', isOwn: false, reactions: { '🔥': { count: 2, mine: false }, '👍': { count: 1, mine: true } } },
         { id: 'd3', sender: '@you:matrix.org', name: 'Вы', ts: now - 2 * day + 9 * min, body: 'Согласен. Давайте только сделаем акцент на читаемости и добавим больше воздуха в списке чатов.', isOwn: true, reactions: {} },
         { id: 'd4', sender: '@nikita:matrix.org', name: 'Nikita', ts: now - day - 40 * min, body: 'Я подготовил прототип тёмной темы. Выглядит очень мягко — без чистого чёрного.', isOwn: false, reactions: {} },
+        { id: 'd4a', sender: '@alina:matrix.org', name: 'Алина Морозова', ts: now - day - 32 * min, body: 'Голосовое сообщение', msgtype: 'm.audio', isOwn: false, reactions: {}, content: { msgtype: 'm.audio', body: 'Голосовое сообщение', url: DEMO_AUDIO, info: { mimetype: 'audio/wav', duration: 1250, size: 10000 }, 'org.matrix.msc3245.voice': {} } },
         { id: 'd5', sender: '@alina:matrix.org', name: 'Алина Морозова', ts: now - 55 * min, body: 'Отлично! К вечеру соберу финальную версию и закину в Figma. Нужно ещё проверить мобильную версию.', isOwn: false, reactions: { '❤️': { count: 3, mine: true } } },
         { id: 'd6', sender: '@you:matrix.org', name: 'Вы', ts: now - 18 * min, body: 'Супер. Я как раз доделал адаптив — на телефоне сайдбар уезжает, а композер остаётся внизу. Попробуй!', isOwn: true, reactions: { '🎉': { count: 2, mine: false } } },
       ],
@@ -1794,6 +2769,7 @@ function exitDemo() {
   state.demo = false;
   state.demoRooms = [];
   state.currentRoomId = null;
+  document.title = 'mst.matrix — Matrix, beautifully';
   location.hash = '';
   $('#app-view').classList.add('hidden');
   $('#auth-view').classList.remove('hidden');
@@ -1803,6 +2779,7 @@ function exitDemo() {
    Logout
    ════════════════════════════════════════════════════════════ */
 async function logout() {
+  if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
   if (state.demo) {
     exitDemo();
     return;
@@ -1824,6 +2801,9 @@ async function logout() {
 }
 
 function showAuth() {
+  document.title = 'mst.matrix — Matrix, beautifully';
+  exitFocusMode();
+  closeCommandPalette();
   $('#app-view').classList.add('hidden');
   $('#auth-view').classList.remove('hidden');
   $('#password').value = '';
@@ -1848,12 +2828,12 @@ function bindEvents() {
     btn.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
   });
 
-  $('#advanced-toggle').addEventListener('click', () => {
-    $('#advanced-box').classList.toggle('hidden');
-  });
-
   $('#logout-btn').addEventListener('click', logout);
   $('#logout-btn-2').addEventListener('click', logout);
+  $('#palette-btn').addEventListener('click', openCommandPalette);
+  $('#bookmarks-btn').addEventListener('click', openBookmarks);
+  $('#focus-btn').addEventListener('click', toggleFocusMode);
+  $('#focus-exit').addEventListener('click', exitFocusMode);
   $('#settings-btn').addEventListener('click', openSettings);
   $('#empty-settings-btn').addEventListener('click', openSettings);
   $('#profile-btn').addEventListener('click', openProfileModal);
@@ -1875,13 +2855,27 @@ function bindEvents() {
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
-      $('#room-search')?.focus();
+      openCommandPalette();
     }
     if (e.key === 'Escape') {
+      const overlayOpen =
+        !$('#modal-backdrop')?.classList.contains('hidden') ||
+        !$('#command-palette')?.classList.contains('hidden') ||
+        !$('#emoji-pop')?.classList.contains('hidden') ||
+        !$('#lightbox')?.classList.contains('hidden');
+      closeCommandPalette();
+      if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
       closeModals();
       closeLightbox();
       $('#emoji-pop')?.classList.add('hidden');
       closeSidebar();
+      if (!overlayOpen) exitFocusMode();
+    }
+    const tag = e.target?.tagName;
+    const typing = tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable;
+    if (e.key.toLowerCase() === 'f' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      toggleFocusMode();
     }
   });
 
@@ -1917,6 +2911,13 @@ function bindEvents() {
   $('#message-input').addEventListener('input', () => {
     resizeComposer();
     sendTypingState();
+    if (state.currentRoomId) {
+      const value = $('#message-input').value;
+      if (value.trim()) state.drafts[state.currentRoomId] = value;
+      else delete state.drafts[state.currentRoomId];
+      clearTimeout(state.draftTimer);
+      state.draftTimer = setTimeout(saveDrafts, 400);
+    }
   });
   $('#message-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1925,6 +2926,10 @@ function bindEvents() {
     }
   });
   $('#send-btn').addEventListener('click', sendMessage);
+
+  $('#voice-btn').addEventListener('click', toggleVoiceRecording);
+  $('#voice-cancel').addEventListener('click', () => finishVoiceRecording(false));
+  $('#voice-send').addEventListener('click', () => finishVoiceRecording(true));
 
   $('#attach-btn').addEventListener('click', () => $('#file-input').click());
   $('#file-input').addEventListener('change', (e) => {
@@ -1950,19 +2955,67 @@ function bindEvents() {
     updateSendButton();
   });
 
+  // Infinite scrollback
+  $('#message-scroll').addEventListener('scroll', () => {
+    const el = $('#message-scroll');
+    if (el && el.scrollTop < 80) loadOlderMessages();
+  });
+
   // Messages
   $('#messages').addEventListener('click', async (e) => {
-    const fileLink = e.target.closest('[data-file-mxc]');
-    if (fileLink && fileLink.dataset.fileMxc) {
+    if (window.matchMedia('(hover: none)').matches) {
+      const msg = e.target.closest('.msg');
+      if (msg && !e.target.closest('.msg-tools') && !e.target.closest('[data-action]') && !e.target.closest('[data-audio-download]') && !e.target.closest('[data-file-event]') && !e.target.closest('.audio-play') && !e.target.closest('.audio-speed') && !e.target.closest('.audio-wave')) {
+        $$('.msg.tools-open').forEach((m) => { if (m !== msg) m.classList.remove('tools-open'); });
+        msg.classList.toggle('tools-open');
+      }
+    }
+
+    const fileBtn = e.target.closest('[data-file-event]');
+    if (fileBtn && !e.target.closest('[data-action]')) {
       e.preventDefault();
-      const ok = await downloadAuthenticatedFile(fileLink);
-      if (!ok) window.open(fileLink.href, '_blank', 'noopener');
+      const content = state.messageContent.get(fileBtn.dataset.fileEvent);
+      if (content) {
+        try {
+          await downloadAttachment(content, content.body || 'file');
+        } catch {
+          toast('Не удалось скачать файл', 'error');
+        }
+      }
+      return;
+    }
+
+    const audioDownload = e.target.closest('[data-audio-download]');
+    if (audioDownload) {
+      e.preventDefault();
+      const audioEl = audioDownload.closest('[data-audio-event]');
+      const content = state.messageContent.get(audioEl?.dataset.audioEvent);
+      if (content) {
+        try {
+          await downloadAttachment(content, content.body || 'audio');
+        } catch {
+          toast('Не удалось скачать аудио', 'error');
+        }
+      }
       return;
     }
 
     const lightboxImg = e.target.closest('[data-action="lightbox"]');
     if (lightboxImg) {
       openLightbox(lightboxImg.currentSrc || lightboxImg.dataset.src);
+      return;
+    }
+
+    const jumpReply = e.target.closest('[data-action="jump-reply"]');
+    if (jumpReply) {
+      e.preventDefault();
+      const escaped = window.CSS?.escape ? CSS.escape(jumpReply.dataset.event) : jumpReply.dataset.event;
+      const target = document.querySelector(`.msg[data-event-id="${escaped}"]`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('msg-highlight');
+        setTimeout(() => target.classList.remove('msg-highlight'), 2000);
+      }
       return;
     }
 
@@ -1979,9 +3032,44 @@ function bindEvents() {
     const actionBtn = e.target.closest('[data-action]');
     if (!actionBtn) return;
     const action = actionBtn.dataset.action;
-    if (['reply', 'react', 'edit', 'delete', 'copy'].includes(action)) {
+    if (['reply', 'react', 'edit', 'delete', 'copy', 'bookmark'].includes(action)) {
       handleMessageAction(action, actionBtn.dataset.event, actionBtn);
     }
+  });
+
+  // Command palette
+  $('#command-palette').addEventListener('click', (e) => {
+    if (e.target.id === 'command-palette') closeCommandPalette();
+  });
+  $('#command-input').addEventListener('input', (e) => renderCommands(e.target.value));
+  $('#command-input').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveCommand(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveCommand(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); selectCommand(state.commandIndex); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeCommandPalette(); }
+  });
+  $('#command-results').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-command-index]');
+    if (item) selectCommand(Number(item.dataset.commandIndex));
+  });
+
+  // Bookmarks & recap
+  $('#bookmarks-body').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-bookmark-delete]');
+    if (del) {
+      state.bookmarks = state.bookmarks.filter((b) => !(b.id === del.dataset.bookmarkDelete && b.roomId === del.dataset.bookmarkRoom));
+      saveBookmarks();
+      openBookmarks();
+      return;
+    }
+    const jump = e.target.closest('[data-bookmark-jump]');
+    if (jump) jumpToBookmark(jump.dataset.bookmarkJump, jump.dataset.bookmarkRoom);
+  });
+  $('#recap-body').addEventListener('click', (e) => {
+    const room = e.target.closest('[data-recap-room]');
+    if (!room) return;
+    closeModals();
+    selectRoom(room.dataset.recapRoom);
   });
 
   // Modals
@@ -2012,8 +3100,19 @@ function bindEvents() {
     if (!value) return;
     if (state.demo) {
       state.profile.displayName = value;
+      state.userId = state.userId || '@you:matrix.org';
       $('#my-name').textContent = value;
       $('#settings-name').textContent = value;
+      const myAvatar = $('#my-avatar');
+      if (myAvatar) myAvatar.outerHTML = avatarHtml(value, null, 'avatar-36').replace(
+        '<span class="avatar avatar-36"',
+        '<span id="my-avatar" class="avatar avatar-36"'
+      );
+      const settingsAvatar = $('#settings-avatar');
+      if (settingsAvatar) settingsAvatar.outerHTML = avatarHtml(value, null, 'avatar-56').replace(
+        '<span class="avatar avatar-56"',
+        '<span id="settings-avatar" class="avatar avatar-56"'
+      );
       toast('Имя сохранено (демо)', 'success', 1800);
       return;
     }
@@ -2053,16 +3152,44 @@ function bindEvents() {
     const btn = e.target.closest('[data-tab]');
     if (!btn) return;
     $$('#new-room-tabs button').forEach((b) => b.classList.toggle('active', b === btn));
-    $('#tab-create').classList.toggle('hidden', btn.dataset.tab !== 'create');
-    $('#tab-join').classList.toggle('hidden', btn.dataset.tab !== 'join');
+    ['create', 'join', 'dm'].forEach((tab) => {
+      const panel = document.getElementById('tab-' + tab);
+      if (panel) panel.classList.toggle('hidden', btn.dataset.tab !== tab);
+    });
   });
   $('#create-room-submit').addEventListener('click', createRoom);
   $('#join-room-submit').addEventListener('click', joinRoom);
+  $('#dm-submit').addEventListener('click', startDM);
 
   // Room leave (delegated)
-  $('#room-info-body').addEventListener('click', (e) => {
+  $('#room-info-body').addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-leave-room]');
-    if (btn) leaveRoom(btn.dataset.leaveRoom);
+    if (btn) {
+      leaveRoom(btn.dataset.leaveRoom);
+      return;
+    }
+    if (e.target.closest('#invite-btn')) {
+      const input = $('#invite-user');
+      let userId = input?.value.trim() || '';
+      if (!userId) return;
+      if (!userId.startsWith('@')) userId = '@' + userId;
+      const room = getCurrentRoom();
+      if (!room) return;
+      if (state.demo) {
+        const name = userId.replace(/^@/, '').split(':')[0];
+        room.members.push({ name, id: userId, power: 0 });
+        openRoomInfo();
+        toast('Пользователь приглашён (демо)', 'success');
+        return;
+      }
+      try {
+        await state.client.invite(room.roomId, userId);
+        toast('Приглашение отправлено', 'success');
+        openRoomInfo();
+      } catch (err) {
+        toast(err?.message || 'Не удалось пригласить пользователя', 'error');
+      }
+    }
   });
 
   // Demo link
@@ -2100,6 +3227,7 @@ function closeLightbox() {
 async function init() {
   hydrateIcons();
   loadPrefs();
+  loadUserData();
 
   // Extra elements must exist before event bindings are attached.
   const composerWrap = $('.composer-wrap');
@@ -2113,7 +3241,20 @@ async function init() {
     filePreview.className = 'file-preview';
     filePreview.id = 'file-preview';
     composerWrap.insertBefore(filePreview, composerWrap.querySelector('.composer'));
+
+    const voiceBar = document.createElement('div');
+    voiceBar.className = 'voice-recording hidden';
+    voiceBar.id = 'voice-recording';
+    voiceBar.innerHTML = `
+      <span class="voice-dot"></span>
+      <span class="voice-timer" id="voice-timer">0:00</span>
+      <span class="voice-label">Запись голосового…</span>
+      <button class="btn btn-ghost btn-sm" id="voice-cancel" type="button">Отмена</button>
+      <button class="btn btn-primary btn-sm" id="voice-send" type="button">Отправить</button>`;
+    composerWrap.insertBefore(voiceBar, composerWrap.querySelector('.composer'));
   }
+
+  if (!voiceSupported()) $('#voice-btn')?.classList.add('hidden');
 
   // The lightbox and emoji picker must not inherit the hidden modal backdrop.
   const lightbox = $('#lightbox');

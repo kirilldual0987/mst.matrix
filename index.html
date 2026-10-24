@@ -68,15 +68,7 @@
               <div class="form-row">
                 <label class="check">
                   <input type="checkbox" id="remember" checked />
-                  <span>Запомнить меня</span>
-                </label>
-                <button type="button" class="link-btn" id="advanced-toggle">Настройки</button>
-              </div>
-
-              <div id="advanced-box" class="advanced-box hidden">
-                <label class="check">
-                  <input type="checkbox" id="auto-login" checked />
-                  <span>Входить автоматически при следующем визите</span>
+                  <span>Запомнить меня на этом устройстве</span>
                 </label>
               </div>
 
@@ -101,6 +93,7 @@
               <span>mst<span class="brand-dot">.</span>matrix</span>
             </a>
             <div class="head-actions">
+              <button class="icon-btn" id="palette-btn" title="Команды (⌘K)" data-icon="command"></button>
               <button class="icon-btn" id="new-room-btn" title="Новая комната" data-icon="plus"></button>
               <button class="icon-btn" id="settings-btn" title="Настройки" data-icon="settings"></button>
             </div>
@@ -165,6 +158,8 @@
                 </span>
               </button>
               <div class="chat-actions">
+                <button class="icon-btn" id="bookmarks-btn" title="Сохранённые сообщения" data-icon="bookmark"></button>
+                <button class="icon-btn" id="focus-btn" title="Режим фокуса (F)" data-icon="focus"></button>
                 <button class="icon-btn" id="chat-search-btn" title="Поиск в чате" data-icon="search"></button>
                 <button class="icon-btn" id="room-info-btn-2" title="Информация о комнате" data-icon="info"></button>
               </div>
@@ -187,11 +182,15 @@
                 <input type="file" id="file-input" multiple hidden />
                 <button class="icon-btn" id="emoji-btn" title="Эмодзи" data-icon="smile"></button>
                 <textarea id="message-input" rows="1" placeholder="Написать сообщение…" aria-label="Сообщение"></textarea>
+                <button class="icon-btn" id="voice-btn" title="Голосовое сообщение" data-icon="mic"></button>
                 <button class="send-btn" id="send-btn" title="Отправить" aria-label="Отправить" data-icon="send"></button>
               </div>
               <p class="composer-hint">Enter — отправить · Shift+Enter — новая строка</p>
             </div>
           </div>
+          <button class="focus-exit hidden" id="focus-exit">
+            <span data-icon="focus"></span><span>Выйти из фокуса</span><kbd>Esc</kbd>
+          </button>
         </main>
       </section>
     </div>
@@ -253,6 +252,7 @@
           <section class="settings-section">
             <h4>О клиенте</h4>
             <p class="muted">mst.matrix · статический веб-клиент Matrix на matrix-js-sdk. Работает прямо в браузере.</p>
+            <p class="muted" id="client-status"></p>
             <button class="btn btn-danger-soft btn-sm" id="logout-btn-2" data-icon="logout">Выйти из аккаунта</button>
           </section>
         </div>
@@ -267,7 +267,8 @@
         <div class="modal-body">
           <div class="tabs" id="new-room-tabs">
             <button class="active" data-tab="create">Создать</button>
-            <button data-tab="join">Войти по адресу</button>
+            <button data-tab="join">Войти</button>
+            <button data-tab="dm">Личное</button>
           </div>
           <div id="tab-create">
             <div class="field">
@@ -291,6 +292,14 @@
             </div>
             <button class="btn btn-primary btn-block" id="join-room-submit">Войти в комнату</button>
           </div>
+          <div id="tab-dm" class="hidden">
+            <div class="field">
+              <label for="dm-user">Matrix ID пользователя</label>
+              <div class="input-wrap"><input id="dm-user" type="text" placeholder="@user:matrix.org" /></div>
+            </div>
+            <p class="muted" style="font-size:0.78rem; line-height:1.5;">Будет создана приватная комната и отправлено приглашение.</p>
+            <button class="btn btn-primary btn-block" id="dm-submit">Начать переписку</button>
+          </div>
           <p class="form-error" id="new-room-error"></p>
         </div>
       </div>
@@ -313,6 +322,24 @@
         <div class="modal-body" id="profile-body"></div>
       </div>
 
+      <!-- Bookmarks -->
+      <div class="modal modal-sm" id="bookmarks-modal" role="dialog" aria-modal="true" aria-labelledby="bookmarks-title">
+        <header class="modal-head">
+          <h3 id="bookmarks-title">Сохранённые сообщения</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="bookmarks-body"></div>
+      </div>
+
+      <!-- Recap -->
+      <div class="modal" id="recap-modal" role="dialog" aria-modal="true" aria-labelledby="recap-title">
+        <header class="modal-head">
+          <h3 id="recap-title">Сводка непрочитанного</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="recap-body"></div>
+      </div>
+
       <!-- Lightbox -->
       <div class="lightbox hidden" id="lightbox">
         <button class="icon-btn lightbox-close" data-icon="x" aria-label="Закрыть"></button>
@@ -321,6 +348,18 @@
 
       <!-- Emoji picker -->
       <div class="emoji-pop hidden" id="emoji-pop"></div>
+    </div>
+
+    <div class="command-backdrop hidden" id="command-palette">
+      <div class="command-panel" role="dialog" aria-modal="true" aria-label="Командная палитра">
+        <div class="command-input-row">
+          <span class="command-ico" data-icon="command"></span>
+          <input id="command-input" type="text" placeholder="Команда, комната или действие…" autocomplete="off" spellcheck="false" />
+          <kbd>esc</kbd>
+        </div>
+        <div class="command-results" id="command-results"></div>
+        <div class="command-foot"><span>↑↓</span> навигация <span>Enter</span> открыть <span>Esc</span> закрыть</div>
+      </div>
     </div>
 
     <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
