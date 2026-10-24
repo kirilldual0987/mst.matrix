@@ -3582,6 +3582,11 @@ function refreshSecurityPanel() {
     status.className = 'crypto-status muted';
     return;
   }
+  if (!window.isSecureContext) {
+    status.innerHTML = 'E2EE недоступно: нужен HTTPS (или localhost), иначе браузер блокирует WebCrypto.';
+    status.className = 'crypto-status error';
+    return;
+  }
   if (state.cryptoError) {
     status.innerHTML = `E2EE не инициализировано: ${escapeHtml(state.cryptoError)} <button class="link-btn" id="crypto-retry">Повторить</button>`;
     status.className = 'crypto-status error';
@@ -3696,7 +3701,7 @@ async function retryDecryption() {
     if (ev.getType?.() === 'm.room.encrypted' || ev.isEncrypted?.()) {
       count += 1;
       try {
-        await state.client.decryptEventIfNeeded(ev);
+        await state.client.decryptEventIfNeeded(ev, { isRetry: true });
       } catch {}
     }
   }
