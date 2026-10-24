@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>mst.matrix</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css" integrity="sha512-8mM0TBGpBa7SMOLN6XcV1ChwEDlCAzTSqR7sX/r0HMHQx0XWWvXUOBhXQBlHzuhZldQVCTq6XOk6kEsNIA1C8w==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<style>
+  body { margin: 20px; }
+  #chat { display: none; }
+  #rooms { max-height: 400px; overflow-y: auto; }
+  #messages { max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; }
+</style>
+</head>
+<body>
+<h2>mst.matrix</h2>
+<div id="login">
+  <h3>Login</h3>
+  <label>Homeserver URL <input type="text" id="homeserver" placeholder="https://matrix.org" required></label>
+  <label>User ID (e.g. @user:matrix.org) <input type="text" id="userId" required></label>
+  <label>Password <input type="password" id="password" required></label>
+  <button id="loginBtn">Login</button>
+  <p id="loginStatus" style="color:red;"></p>
+</div>
+<div id="chat">
+  <div style="display:flex; gap:10px;">
+    <div style="flex:1; min-width:200px;">
+      <h4>Rooms</h4>
+      <ul id="rooms"></ul>
+    </div>
+    <div style="flex:3;">
+      <h4 id="roomName">Select a room</h4>
+      <div id="messages"></div>
+      <textarea id="msgInput" rows="2" style="width:100%;" placeholder="Type a message..."></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+  <button id="logoutBtn" style="margin-top:10px;">Logout</button>
+</div>
+
+<script src="https://unpkg.com/matrix-js-sdk@latest/lib/index.js"></script>
+<script>
+let client = null;
+let currentRoomId = null;
+
+function addMessage(roomId, event) {
+  if (roomId !== currentRoomId) return;
+  const msgDiv = document.createElement('div');
+  const sender = event.getSender();
+  const body = event.getContent().body;
+  msgDiv.textContent = `${sender}: ${body}`;
+  document.getElementById('messages').appendChild(msgDiv);
+  const msgs = document.getElementById('messages');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function loadRoom(roomId) {
+  currentRoomId = roomId;
+  const room = client.getRoom(roomId);
+  document.getElementById('roomName').textContent = room.name || roomId;
+  const msgsDiv = document.getElementById('messages');
+  msgsDiv.innerHTML = '';
+  room.timeline.forEach(ev => {
+    if (ev.getType() === 'm.room.message' && ev.getContent().msgtype === 'm.text') {
+      addMessage(roomId, ev);
+    }
+  });
+}
+
+function refreshRooms() {
+  const roomsList = document.getElementById('rooms');
+  roomsList.innerHTML = '';
+  client.getRooms().forEach(room => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.textContent = room.name || room.roomId;
+    btn.onclick = () => loadRoom(room.roomId);
+    li.appendChild(btn);
+    roomsList.appendChild(li);
+  });
+}
+
+document.getElementById('loginBtn').addEventListener('click', async () => {
+  const homeserver = document.getElementById('homeserver').value.trim();
+  const userId = document.getElementById('userId').value.trim();
+  const password = document.getElementById('password').value;
+  const status = document.getElementById('loginStatus');
+  status.textContent = '';
+  try {
+    client = matrixcs.createClient({ baseUrl: homeserver, accessToken: null, userId });
+    const loginResponse = await client.loginWithPassword(userId, password);
+    client.startClient();
+    client.on('Room.timeline', (event, room, toStartOfTimeline) => {
+      if (event.getType() === 'm.room.message' && event.getContent().msgtype === 'm.text') {
+        addMessage(room.roomId, event);
+      }
+    });
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('chat').style.display = 'block';
+    refreshRooms();
+  } catch (e) {
+    console.error(e);
+    status.textContent = 'Login failed: ' + e.message;
+  }
+});
+
+document.getElementById('sendBtn').addEventListener('click', async () => {
+  const text = document.getElementById('msgInput').value.trim();
+  if (!text || !currentRoomId) return;
+  await client.sendEvent(currentRoomId, 'm.room.message', { msgtype: 'm.text', body: text }, '');
+  document.getElementById('msgInput').value = '';
+});
+
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  if (client) client.stopClient();
+  client = null;
+  currentRoomId = null;
+  document.getElementById('chat').style.display = 'none';
+  document.getElementById('login').style.display = 'block';
+});
+</script>
+</body>
+</html>
