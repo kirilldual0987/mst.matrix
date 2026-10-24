@@ -508,10 +508,24 @@ async function handleLogin(e) {
 
   setLoginLoading(true);
   try {
-    const client = matrixcs.createClient({ baseUrl: homeserver, userId });
-    await client.loginWithPassword(userId, password);
+    const bootstrap = matrixcs.createClient({ baseUrl: homeserver, userId });
+    const loginResponse = await bootstrap.loginRequest({
+      type: 'm.login.password',
+      identifier: { type: 'm.id.user', user: userId },
+      password,
+      initial_device_display_name: 'mst.matrix web',
+    });
+    if (!loginResponse?.access_token || !loginResponse?.device_id) {
+      throw new Error('Homeserver не вернул access_token/device_id — вход невозможен.');
+    }
 
-    state.userId = client.getUserId();
+    const client = matrixcs.createClient({
+      baseUrl: homeserver,
+      userId: loginResponse.user_id || userId,
+      accessToken: loginResponse.access_token,
+      deviceId: loginResponse.device_id,
+    });
+    state.userId = loginResponse.user_id || userId;
     attachClient(client);
     await prepareCrypto(client);
     const ready = waitForPrepared(client);
@@ -545,6 +559,12 @@ async function restoreSession(session) {
   setLoginLoading(true, 'Войти');
   $('.btn-label', $('#login-btn')).textContent = 'Восстанавливаем сессию…';
   try {
+    if (!session.deviceId) {
+      clearSession();
+      setAuthError('Сессия устарела: войдите заново, чтобы включить E2EE.');
+      showAuth();
+      return;
+    }
     const client = matrixcs.createClient({
       baseUrl: session.baseUrl,
       userId: session.userId,
