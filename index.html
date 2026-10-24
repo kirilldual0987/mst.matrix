@@ -1,94 +1,330 @@
-<!DOCTYPE html>
-<html lang="en"
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>mst.matrix – Material You Matrix Client</title>
-  <!-- Material Web Components (MDC) -->
-  <script type="module" src="https://cdn.jsdelivr.net/npm/@material/web@latest/material-web.min.js"></script>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <!-- Top App Bar with menu, settings, and theme toggle -->
-  <md-standard-top-app-bar id="topBar"
-                      headline="mst.matrix"
-                      leadingIcon="menu"
-                      trailingIcon="more_vert">
-    <!-- The "more_vert" icon opens a small menu with Settings and Theme toggle -->
-  </md-standard-top-app-bar>
+<!doctype html>
+<html lang="ru" data-theme="light" data-accent="violet">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#7c5cff" />
+    <meta name="description" content="mst.matrix — a modern, fast Matrix web client." />
+    <title>mst.matrix — Matrix, beautifully</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237c5cff'/%3E%3Ccircle cx='20' cy='32' r='6' fill='white'/%3E%3Ccircle cx='32' cy='32' r='6' fill='white' opacity='.7'/%3E%3Ccircle cx='44' cy='32' r='6' fill='white' opacity='.4'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ══════════════════ AUTH ══════════════════ -->
+      <section id="auth-view" class="auth">
+        <div class="auth-glow auth-glow-1"></div>
+        <div class="auth-glow auth-glow-2"></div>
+        <div class="auth-glow auth-glow-3"></div>
 
-  <!-- Settings dialog (Material dialog) -->
-  <md-dialog id="settingsDialog" type="alert">
-    <md-dialog-title>Settings</md-dialog-title>
-    <md-dialog-content>
-      <md-switch id="darkModeSwitch" label="Dark mode"></md-switch>
-    </md-dialog-content>
-    <md-dialog-actions>
-      <md-text-button dialogDismiss>Close</md-text-button>
-    </md-dialog-actions>
-  </md-dialog>
+        <div class="auth-showcase">
+          <a class="brand brand-lg" href="#" aria-label="mst.matrix">
+            <span class="logo-mark" aria-hidden="true">
+              <i></i><i></i><i></i>
+            </span>
+            <span>mst<span class="brand-dot">.</span>matrix</span>
+          </a>
+          <h1>Общение,<br />которое чувствуется<br /><span class="grad-text">по-новому.</span></h1>
+          <p class="showcase-sub">Быстрый, приватный и красивый клиент Matrix прямо в браузере.</p>
+          <ul class="feature-list">
+            <li><span class="feature-ico" data-icon="bolt"></span><div><strong>Мгновенно</strong><small>Без установки и лишних шагов</small></div></li>
+            <li><span class="feature-ico" data-icon="lock"></span><div><strong>Приватно</strong><small>Открытый протокол Matrix</small></div></li>
+            <li><span class="feature-ico" data-icon="sparkles"></span><div><strong>Красиво</strong><small>Светлая и тёмная темы</small></div></li>
+          </ul>
+        </div>
 
-  <!-- Navigation drawer (rooms) -->
-  <md-drawer id="drawer" type="modal">
-    <md-drawer-header>
-      <div slot="title">Rooms</div>
-    </md-drawer-header>
-    <md-drawer-content>
-      <md-list id="roomList"></md-list>
-    </md-drawer-content>
-    <md-drawer-footer>
-      <div style="padding:8px;">
-        <md-filled-text-field id="newRoomName" label="Room name or alias"
-                               placeholder="#room:example.org"
-                               style="width:100%;"/>
-        <md-filled-button id="createRoomBtn" style="width:100%; margin-top:8px;"
-                              >Create / Join</md-filled-button>
-      </div>
-    </md-drawer-footer>
-  </md-drawer>
+        <div class="auth-panel">
+          <div class="auth-card">
+            <div class="auth-card-head">
+              <span class="logo-mark logo-mark-sm" aria-hidden="true"><i></i><i></i><i></i></span>
+              <h2>С возвращением</h2>
+              <p>Войдите в свой аккаунт Matrix</p>
+            </div>
 
-  <!-- Main content area -->
-  <div id="mainContent" class="container" style="margin-top:16px;">
-    <!-- Login view (centered) -->
-    <div id="login" class="centered">
-      <md-card style="max-width:400px; margin:auto; padding:24px;">
-        <h3 style="margin-top:0; text-align:center;">Login to Matrix</h3>
-        <md-filled-text-field id="homeserver" label="Homeserver URL"
-                                   value="https://matrix.org" style="width:100%; margin-top:12px;"/>
-        <md-filled-text-field id="userId" label="User ID"
-                                   style="width:100%; margin-top:12px;"/>
-        <md-filled-text-field id="password" label="Password" type="password"
-                                   style="width:100%; margin-top:12px;"/>
-        <md-filled-button id="loginBtn" style="width:100%; margin-top:24px;"
-                           >Login</md-filled-button>
-        <p id="loginStatus" class="error" style="color:red; margin-top:8px; text-align:center;"></p>
-      </md-card>
+            <form id="login-form" autocomplete="on">
+              <div class="field">
+                <label for="homeserver">Homeserver</label>
+                <div class="input-wrap">
+                  <span class="input-icon" data-icon="server"></span>
+                  <input id="homeserver" name="homeserver" type="url" placeholder="https://matrix.org" value="https://matrix.org" required spellcheck="false" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="user-id">Matrix ID</label>
+                <div class="input-wrap">
+                  <span class="input-icon" data-icon="at"></span>
+                  <input id="user-id" name="userId" type="text" placeholder="@you:matrix.org" required spellcheck="false" autocapitalize="none" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="password">Пароль</label>
+                <div class="input-wrap">
+                  <span class="input-icon" data-icon="lock"></span>
+                  <input id="password" name="password" type="password" placeholder="••••••••••" required />
+                  <button type="button" class="icon-btn input-action" id="toggle-password" aria-label="Показать пароль" data-icon="eye"></button>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <label class="check">
+                  <input type="checkbox" id="remember" checked />
+                  <span>Запомнить меня</span>
+                </label>
+                <button type="button" class="link-btn" id="advanced-toggle">Настройки</button>
+              </div>
+
+              <div id="advanced-box" class="advanced-box hidden">
+                <label class="check">
+                  <input type="checkbox" id="auto-login" checked />
+                  <span>Входить автоматически при следующем визите</span>
+                </label>
+              </div>
+
+              <p id="login-error" class="form-error" role="alert"></p>
+              <button id="login-btn" class="btn btn-primary btn-lg" type="submit">
+                <span class="btn-label">Войти</span>
+                <span class="spinner hidden"></span>
+              </button>
+            </form>
+
+            <p class="auth-foot">Нет аккаунта? <a href="https://matrix.org/ecosystem/clients/" target="_blank" rel="noopener">Узнать о Matrix</a></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ APP ══════════════════ -->
+      <section id="app-view" class="app-shell hidden">
+        <aside id="sidebar" class="sidebar">
+          <header class="sidebar-head">
+            <a class="brand" href="#" aria-label="mst.matrix">
+              <span class="logo-mark logo-mark-sm" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>mst<span class="brand-dot">.</span>matrix</span>
+            </a>
+            <div class="head-actions">
+              <button class="icon-btn" id="new-room-btn" title="Новая комната" data-icon="plus"></button>
+              <button class="icon-btn" id="settings-btn" title="Настройки" data-icon="settings"></button>
+            </div>
+          </header>
+
+          <div class="sidebar-search">
+            <span data-icon="search" class="search-ico"></span>
+            <input id="room-search" type="search" placeholder="Поиск комнат" aria-label="Поиск комнат" />
+            <kbd>⌘K</kbd>
+          </div>
+
+          <div class="room-list-head">
+            <span>Чаты</span>
+            <span class="room-count" id="room-count">0</span>
+          </div>
+          <nav class="room-list" id="room-list" aria-label="Список комнат"></nav>
+
+          <div class="sidebar-empty hidden" id="rooms-empty">
+            <span data-icon="messages"></span>
+            <p>Пока нет комнат</p>
+            <button class="btn btn-ghost btn-sm" id="empty-new-room">Создать комнату</button>
+          </div>
+
+          <footer class="user-bar">
+            <button class="user-chip" id="profile-btn">
+              <span class="avatar avatar-36" id="my-avatar">?</span>
+              <span class="user-meta">
+                <strong id="my-name">…</strong>
+                <small id="my-id">…</small>
+              </span>
+            </button>
+            <button class="icon-btn" id="logout-btn" title="Выйти" data-icon="logout"></button>
+          </footer>
+        </aside>
+
+        <div class="sidebar-scrim" id="sidebar-scrim"></div>
+
+        <main class="main">
+          <!-- Empty state -->
+          <div class="empty-state" id="empty-state">
+            <div class="empty-art">
+              <span class="orb orb-1"></span><span class="orb orb-2"></span><span class="orb orb-3"></span>
+              <span class="empty-bubble b1"></span><span class="empty-bubble b2"></span>
+            </div>
+            <h2>Начните общение</h2>
+            <p>Выберите чат слева или создайте новую комнату.</p>
+            <div class="empty-actions">
+              <button class="btn btn-primary" id="empty-new-room-2" data-icon="plus">Новая комната</button>
+              <button class="btn btn-ghost" id="empty-settings-btn" data-icon="settings">Настройки</button>
+            </div>
+          </div>
+
+          <!-- Chat -->
+          <div class="chat hidden" id="chat-view">
+            <header class="chat-head">
+              <button class="icon-btn mobile-only" id="menu-btn" aria-label="Меню" data-icon="menu"></button>
+              <button class="chat-identity" id="room-info-btn">
+                <span class="avatar avatar-42" id="room-avatar">#</span>
+                <span class="chat-title">
+                  <strong id="room-name">Комната</strong>
+                  <small id="room-sub">—</small>
+                </span>
+              </button>
+              <div class="chat-actions">
+                <button class="icon-btn" id="chat-search-btn" title="Поиск в чате" data-icon="search"></button>
+                <button class="icon-btn" id="room-info-btn-2" title="Информация о комнате" data-icon="info"></button>
+              </div>
+            </header>
+
+            <div class="chat-search-bar hidden" id="chat-search-bar">
+              <span data-icon="search"></span>
+              <input id="chat-search" type="search" placeholder="Поиск по сообщениям…" />
+              <button class="icon-btn" id="chat-search-close" data-icon="x" aria-label="Закрыть поиск"></button>
+            </div>
+
+            <div class="message-scroll" id="message-scroll">
+              <div class="messages" id="messages"></div>
+            </div>
+
+            <div class="composer-wrap">
+              <div id="typing" class="typing"></div>
+              <div class="composer">
+                <button class="icon-btn" id="attach-btn" title="Прикрепить файл" data-icon="paperclip"></button>
+                <input type="file" id="file-input" multiple hidden />
+                <button class="icon-btn" id="emoji-btn" title="Эмодзи" data-icon="smile"></button>
+                <textarea id="message-input" rows="1" placeholder="Написать сообщение…" aria-label="Сообщение"></textarea>
+                <button class="send-btn" id="send-btn" title="Отправить" aria-label="Отправить" data-icon="send"></button>
+              </div>
+              <p class="composer-hint">Enter — отправить · Shift+Enter — новая строка</p>
+            </div>
+          </div>
+        </main>
+      </section>
     </div>
 
-    <!-- Client UI (hidden until auth) -->
-    <div id="client" class="d-none">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4 id="roomTitle" style="margin:0;">Select a room</h4>
-        <!-- Placeholder for future user profile/avatar button -->
-      </div>
-      <div id="messages" class="message-container"></div>
-      <p id="typing" class="typing-indicator"></p>
-      <!-- Search box -->
-      <div class="d-flex" style="margin-top:8px;">
-        <md-outlined-text-field id="searchInput" label="Search messages"
-                                   style="flex:1; margin-right:8px;"/>
-        <md-icon-button id="clearSearchBtn" aria-label="Clear search"
-                            ><svg slot="icon" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </md-icon-button>
-      </div>
-      <div class="input-area d-flex" style="gap:8px; margin-top:12px;">
-        <md-outline-text-field id="msgInput" label="Message" rows="2" style="flex:1;"></md-outline-text-field>
-        <input type="file" id="fileInput" multiple />
-        <md-filled-button id="sendBtn">Send</md-filled-button>
-      </div>
-    </div>
-  </div>
+    <!-- ══════════════════ MODALS ══════════════════ -->
+    <div class="modal-backdrop hidden" id="modal-backdrop">
+      <!-- Settings -->
+      <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header class="modal-head">
+          <h3 id="settings-title">Настройки</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <section class="settings-section">
+            <h4>Профиль</h4>
+            <div class="profile-card">
+              <span class="avatar avatar-56" id="settings-avatar">?</span>
+              <div>
+                <strong id="settings-name">—</strong>
+                <small id="settings-id">—</small>
+              </div>
+            </div>
+            <div class="field">
+              <label for="display-name">Отображаемое имя</label>
+              <div class="input-wrap"><input id="display-name" type="text" placeholder="Ваше имя" /></div>
+            </div>
+            <button class="btn btn-soft btn-sm" id="save-name-btn">Сохранить имя</button>
+          </section>
 
-  <script src="app.js"></script>
-</body>
+          <section class="settings-section">
+            <h4>Оформление</h4>
+            <div class="segmented" id="theme-switch" role="group" aria-label="Тема">
+              <button data-theme-value="light" class="active" data-icon="sun">Светлая</button>
+              <button data-theme-value="dark" data-icon="moon">Тёмная</button>
+              <button data-theme-value="system" data-icon="monitor">Системная</button>
+            </div>
+            <p class="settings-label">Акцентный цвет</p>
+            <div class="accent-row" id="accent-row">
+              <button class="accent-swatch" data-accent-value="violet" style="--sw:#7c5cff" aria-label="Фиолетовый"></button>
+              <button class="accent-swatch" data-accent-value="blue" style="--sw:#2f80ed" aria-label="Синий"></button>
+              <button class="accent-swatch" data-accent-value="teal" style="--sw:#0f9d8a" aria-label="Бирюзовый"></button>
+              <button class="accent-swatch" data-accent-value="rose" style="--sw:#e0447c" aria-label="Розовый"></button>
+              <button class="accent-swatch" data-accent-value="amber" style="--sw:#c47b0a" aria-label="Янтарный"></button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <h4>Уведомления</h4>
+            <label class="switch-row">
+              <span><strong>Звук новых сообщений</strong><small>Короткий сигнал при входящем</small></span>
+              <input type="checkbox" id="sound-toggle" class="switch" />
+            </label>
+            <label class="switch-row">
+              <span><strong>Уведомления браузера</strong><small>Показывать, когда вкладка неактивна</small></span>
+              <input type="checkbox" id="notify-toggle" class="switch" />
+            </label>
+          </section>
+
+          <section class="settings-section">
+            <h4>О клиенте</h4>
+            <p class="muted">mst.matrix · статический веб-клиент Matrix на matrix-js-sdk. Работает прямо в браузере.</p>
+            <button class="btn btn-danger-soft btn-sm" id="logout-btn-2" data-icon="logout">Выйти из аккаунта</button>
+          </section>
+        </div>
+      </div>
+
+      <!-- New room -->
+      <div class="modal modal-sm" id="new-room-modal" role="dialog" aria-modal="true" aria-labelledby="new-room-title">
+        <header class="modal-head">
+          <h3 id="new-room-title">Новая комната</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body">
+          <div class="tabs" id="new-room-tabs">
+            <button class="active" data-tab="create">Создать</button>
+            <button data-tab="join">Войти по адресу</button>
+          </div>
+          <div id="tab-create">
+            <div class="field">
+              <label for="new-room-name">Название</label>
+              <div class="input-wrap"><input id="new-room-name" type="text" placeholder="Например, Дизайн-команда" /></div>
+            </div>
+            <div class="field">
+              <label for="new-room-topic">Тема <span class="opt">необязательно</span></label>
+              <div class="input-wrap"><input id="new-room-topic" type="text" placeholder="О чём этот чат?" /></div>
+            </div>
+            <label class="switch-row compact">
+              <span><strong>Публичная комната</strong><small>Любой сможет найти и войти</small></span>
+              <input type="checkbox" id="new-room-public" class="switch" />
+            </label>
+            <button class="btn btn-primary btn-block" id="create-room-submit">Создать комнату</button>
+          </div>
+          <div id="tab-join" class="hidden">
+            <div class="field">
+              <label for="join-room-id">Адрес или ID комнаты</label>
+              <div class="input-wrap"><input id="join-room-id" type="text" placeholder="#room:matrix.org" /></div>
+            </div>
+            <button class="btn btn-primary btn-block" id="join-room-submit">Войти в комнату</button>
+          </div>
+          <p class="form-error" id="new-room-error"></p>
+        </div>
+      </div>
+
+      <!-- Room info -->
+      <div class="modal modal-sm" id="room-info-modal" role="dialog" aria-modal="true" aria-labelledby="room-info-title">
+        <header class="modal-head">
+          <h3 id="room-info-title">О комнате</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="room-info-body"></div>
+      </div>
+
+      <!-- Profile -->
+      <div class="modal modal-sm" id="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+        <header class="modal-head">
+          <h3 id="profile-title">Профиль</h3>
+          <button class="icon-btn" data-close-modal data-icon="x" aria-label="Закрыть"></button>
+        </header>
+        <div class="modal-body" id="profile-body"></div>
+      </div>
+
+      <!-- Lightbox -->
+      <div class="lightbox hidden" id="lightbox">
+        <button class="icon-btn lightbox-close" data-icon="x" aria-label="Закрыть"></button>
+        <img id="lightbox-img" alt="Изображение" />
+      </div>
+
+      <!-- Emoji picker -->
+      <div class="emoji-pop hidden" id="emoji-pop"></div>
+    </div>
+
+    <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>
