@@ -34,6 +34,7 @@ const state = {
   cryptoReady: false,
   cryptoError: null,
   backupCheck: null,
+  call: { call: null, incoming: false, video: false, startedAt: 0, timer: null, ringTimer: null, bound: new WeakSet() },
   commandItems: [],
   commandIndex: 0,
   replyingTo: null,
@@ -595,6 +596,9 @@ async function finishLogin() {
   $('#auth-view').classList.add('hidden');
   $('#app-view').classList.remove('hidden');
   await refreshProfile();
+  const voip = state.client.supportsVoip?.() !== false;
+  $('#call-voice-btn')?.classList.toggle('hidden', !voip);
+  $('#call-video-btn')?.classList.toggle('hidden', !voip);
   state.client.getRooms().forEach(watchTypingMembers);
   renderRooms();
   const rooms = state.client.getRooms();
@@ -692,6 +696,7 @@ function attachClient(client) {
       console.warn('Matrix sync error');
     }
   });
+  client.on('Call.incoming', (call) => onIncomingCall(call));
   client.on('crypto.verificationRequestReceived', (request) => {
     toast(`Запрос на проверку от ${request?.otherUserId || 'пользователя'}`, 'info', 8000);
     openVerifyModal(request, request?.otherUserId || 'пользователь', request?.otherDeviceId || null);
@@ -3358,6 +3363,280 @@ async function saveRoomSettings() {
 }
 
 /* ════════════════════════════════════════════════════════════
+   1:1 calls (Matrix legacy VoIP / WebRTC)
+   ════════════════════════════════════════════════════════════ */
+function callRoom() {
+  return state.client?.getRoom(state.call.call?.roomId) || getCurrentRoom();
+}
+
+function callPeerName() {
+  const member = state.call.call?.getOpponentMember?.();
+  if (member?.name) return member.name;
+  return roomName(callRoom()) || 'Собеседник';
+}
+
+function callPeerAvatar() {
+  const member = state.call.call?.getOpponentMember?.();
+  if (!member) return null;
+  try {
+    return member.getAvatarUrl?.(state.client.getHomeserverUrl(), 144, 144, 'crop') || null;
+  } catch {
+    return null;
+  }
+}
+
+function setCallAvatar() {
+  const el = $('#call-avatar');
+  if (!el) return;
+  el.outerHTML = avatarHtml(callPeerName(), callPeerAvatar(), 'avatar-72').replace(
+    '<span class="avatar avatar-72"',
+    '<span id="call-avatar" class="avatar avatar-72"'
+  );
+}
+
+function callStateText() {
+  const call = state.call.call;
+  if (!call) return '';
+  if (state.call.incoming) return 'Входящий звонок…';
+  switch (call.state) {
+    case 'fledgling':
+    case 'wait_local_media':
+    case 'create_offer':
+      return 'Подготовка…';
+    case 'invite_sent':
+      return 'Звоним…';
+    case 'ringing':
+      return 'Звоним…';
+    case 'create_answer':
+    case 'connecting':
+      return 'Соединяем…';
+    case 'connected':
+      return `В звонке · ${formatDuration((Date.now() - state.call.startedAt) / 1000)}`;
+    case 'ended':
+      return 'Звонок завершён';
+    default:
+      return 'Звонок';
+  }
+}
+
+function updateCallStatus() {
+  const status = $('#call-status');
+  if (status) status.textContent = callStateText();
+}
+
+function startCallTimer() {
+  clearInterval(state.call.timer);
+  state.call.timer = setInterval(() => updateCallStatus(), 1000);
+}
+
+function stopCallTimer() {
+  clearInterval(state.call.timer);
+  state.call.timer = null;
+}
+
+function updateCallFeeds() {
+  const call = state.call.call;
+  if (!call) return;
+  const remoteVideo = $('#call-remote-video');
+  const localVideo = $('#call-local-video');
+  const remote = call.remoteUsermediaFeed?.stream || call.getRemoteFeeds?.()[0]?.stream || null;
+  const local = call.localUsermediaStream || call.getLocalFeeds?.()[0]?.stream || null;
+
+  if (remoteVideo && remote) {
+    if (remoteVideo.srcObject !== remote) remoteVideo.srcObject = remote;
+    remoteVideo.classList.toggle('audio-only', !remote.getVideoTracks().length);
+    remoteVideo.play?.().catch(() => {});
+  }
+  if (localVideo) {
+    if (local && localVideo.srcObject !== local) localVideo.srcObject = local;
+    const hide = !local || call.isLocalVideoMuted?.() || call.type === 'voice';
+    localVideo.classList.toggle('hidden', hide);
+    if (!hide) localVideo.play?.().catch(() => {});
+  }
+
+  const camBtn = $('#call-cam');
+  if (camBtn) camBtn.classList.toggle('off', !!call.isLocalVideoMuted?.());
+  const micBtn = $('#call-mic');
+  if (micBtn) micBtn.classList.toggle('off', !!call.isMicrophoneMuted?.());
+}
+
+function updateCallUI() {
+  const call = state.call.call;
+  if (!call) return;
+  setCallAvatar();
+  const name = $('#call-peer-name');
+  if (name) name.textContent = callPeerName();
+  updateCallStatus();
+  updateCallFeeds();
+
+  if (call.state === 'connected' && !state.call.startedAt) {
+    state.call.startedAt = Date.now();
+    startCallTimer();
+    $('#call-incoming-actions')?.classList.add('hidden');
+    $('#call-controls')?.classList.remove('hidden');
+    $('#call-placeholder')?.classList.add('connected');
+  }
+  if (call.state === 'ended') {
+    closeCallUI();
+  }
+}
+
+function bindCallListeners(call) {
+  if (!call || state.call.bound.has(call)) return;
+  state.call.bound.add(call);
+  call.on('state', updateCallUI);
+  call.on('feeds_changed', updateCallFeeds);
+  call.on('error', (err) => {
+    console.warn('Call error', err);
+    toast(err?.message || 'Ошибка звонка', 'error');
+    closeCallUI();
+  });
+  call.on('hangup', () => closeCallUI());
+}
+
+function showCallUI(incoming) {
+  const backdrop = $('#call-backdrop');
+  if (!backdrop) return;
+  backdrop.classList.remove('hidden');
+  $('#call-card')?.classList.toggle('incoming', incoming);
+  $('#call-incoming-actions')?.classList.toggle('hidden', !incoming);
+  $('#call-controls')?.classList.toggle('hidden', incoming);
+  $('#call-cam')?.classList.toggle('hidden', state.call.video === false);
+  if (incoming) {
+    $('#call-status').textContent = 'Входящий звонок…';
+    startRingtone();
+  } else {
+    $('#call-status').textContent = 'Звоним…';
+  }
+  setCallAvatar();
+  updateCallFeeds();
+}
+
+function startRingtone() {
+  stopRingtone();
+  playBeep();
+  state.call.ringTimer = setInterval(playBeep, 2200);
+}
+
+function stopRingtone() {
+  clearInterval(state.call.ringTimer);
+  state.call.ringTimer = null;
+}
+
+function closeCallUI() {
+  stopRingtone();
+  stopCallTimer();
+  const remote = $('#call-remote-video');
+  const local = $('#call-local-video');
+  if (remote) remote.srcObject = null;
+  if (local) local.srcObject = null;
+  $('#call-backdrop')?.classList.add('hidden');
+  state.call = { call: null, incoming: false, video: false, startedAt: 0, timer: null, ringTimer: null, bound: state.call.bound };
+}
+
+async function startCall(video = false) {
+  if (state.demo || !state.client) {
+    toast('Звонки доступны после входа в аккаунт', 'info');
+    return;
+  }
+  if (!state.client?.supportsVoip?.()) {
+    toast('Звонки не поддерживаются этим браузером (нужен WebRTC)', 'error');
+    return;
+  }
+  if (!state.currentRoomId) {
+    toast('Сначала выберите чат', 'info');
+    return;
+  }
+  if (state.call.call) {
+    toast('Звонок уже идёт', 'info');
+    return;
+  }
+  let call;
+  try {
+    call = state.client.createCall(state.currentRoomId);
+  } catch (err) {
+    toast(err?.message || 'Не удалось создать звонок', 'error');
+    return;
+  }
+  if (!call) {
+    toast('Не удалось создать звонок в этой комнате', 'error');
+    return;
+  }
+  state.call.call = call;
+  state.call.incoming = false;
+  state.call.video = video || call.type === 'video';
+  state.call.startedAt = 0;
+  bindCallListeners(call);
+  showCallUI(false);
+  try {
+    if (state.call.video) await call.placeVideoCall();
+    else await call.placeVoiceCall();
+  } catch (err) {
+    toast(err?.message || 'Не удалось позвонить', 'error');
+    closeCallUI();
+  }
+}
+
+function onIncomingCall(call) {
+  if (!call) return;
+  if (state.call.call) {
+    try { call.reject(); } catch {}
+    return;
+  }
+  state.call.call = call;
+  state.call.incoming = true;
+  state.call.video = call.type === 'video';
+  state.call.startedAt = 0;
+  bindCallListeners(call);
+  showCallUI(true);
+  updateCallUI();
+}
+
+async function answerCall() {
+  const call = state.call.call;
+  if (!call) return;
+  stopRingtone();
+  state.call.incoming = false;
+  $('#call-incoming-actions')?.classList.add('hidden');
+  $('#call-controls')?.classList.remove('hidden');
+  $('#call-status').textContent = 'Соединяем…';
+  try {
+    await call.answer(true, state.call.video);
+  } catch (err) {
+    toast(err?.message || 'Не удалось ответить', 'error');
+    closeCallUI();
+  }
+}
+
+function declineCall() {
+  try { state.call.call?.reject(); } catch {}
+  closeCallUI();
+}
+
+function hangupCall() {
+  try { state.call.call?.hangup('user_hangup', false); } catch {}
+  closeCallUI();
+}
+
+async function toggleCallMic() {
+  const call = state.call.call;
+  if (!call) return;
+  try {
+    await call.setMicrophoneMuted(!call.isMicrophoneMuted());
+    updateCallFeeds();
+  } catch {}
+}
+
+async function toggleCallCam() {
+  const call = state.call.call;
+  if (!call) return;
+  try {
+    await call.setLocalVideoMuted(!call.isLocalVideoMuted());
+    updateCallFeeds();
+  } catch {}
+}
+
+/* ════════════════════════════════════════════════════════════
    E2EE: devices, trust and SAS verification
    ════════════════════════════════════════════════════════════ */
 const PHASE_READY = 3;
@@ -4042,6 +4321,20 @@ function allCommands() {
       run: openNewRoom,
     },
     {
+      icon: 'phone',
+      title: 'Аудиозвонок',
+      subtitle: 'Позвонить в текущую комнату',
+      keywords: 'звонок call voice аудио',
+      run: () => startCall(false),
+    },
+    {
+      icon: 'video',
+      title: 'Видеозвонок',
+      subtitle: 'Видеозвонок в текущую комнату',
+      keywords: 'звонок call video видео',
+      run: () => startCall(true),
+    },
+    {
       icon: 'compass',
       title: 'Директория комнат',
       subtitle: 'Публичные комнаты homeserver’а',
@@ -4362,6 +4655,8 @@ function enterDemo() {
     '<span class="avatar avatar-36"',
     '<span id="my-avatar" class="avatar avatar-36"'
   );
+  $('#call-voice-btn')?.classList.add('hidden');
+  $('#call-video-btn')?.classList.add('hidden');
   renderRooms();
   selectRoom(state.demoRooms[0].id);
   toast('Демо-режим: интерфейс без подключения к серверу', 'info', 5000);
@@ -4905,6 +5200,15 @@ function bindEvents() {
       sendThreadReply();
     }
   });
+
+  // Calls
+  $('#call-voice-btn').addEventListener('click', () => startCall(false));
+  $('#call-video-btn').addEventListener('click', () => startCall(true));
+  $('#call-accept').addEventListener('click', answerCall);
+  $('#call-decline').addEventListener('click', declineCall);
+  $('#call-hangup').addEventListener('click', hangupCall);
+  $('#call-mic').addEventListener('click', toggleCallMic);
+  $('#call-cam').addEventListener('click', toggleCallCam);
 
   // E2EE
   $('#load-devices').addEventListener('click', loadMyDevices);

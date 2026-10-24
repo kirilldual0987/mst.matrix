@@ -1331,3 +1331,56 @@ body.voice-active .toast-stack { bottom: 150px; }
 .crypto-status.error { color: var(--danger); }
 .crypto-status.muted { color: var(--text-3); }
 .backup-status { font-size: 0.76rem; margin: 0 0 8px; line-height: 1.45; }
+
+/* Calls */
+.call-backdrop {
+  position: fixed; inset: 0; z-index: 220;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: rgba(6, 6, 10, 0.82); backdrop-filter: blur(18px);
+}
+.call-card {
+  position: relative; width: min(980px, 100%); height: min(620px, 88dvh);
+  border-radius: 28px; overflow: hidden;
+  background: radial-gradient(900px 500px at 50% 0%, #2b2350, #0d0d13 70%);
+  box-shadow: 0 40px 120px rgba(0,0,0,0.6);
+}
+.call-remote { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.call-remote.audio-only { opacity: 0; }
+.call-placeholder {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; text-align: center;
+  color: #f4f2ff; pointer-events: none;
+}
+.call-placeholder .avatar { width: 96px; height: 96px; border-radius: 32px; font-size: 2rem; }
+.call-placeholder h3 { margin: 6px 0 0; font-size: 1.4rem; }
+.call-placeholder p { margin: 0; color: rgba(244,242,255,0.65); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.call-placeholder.connected { opacity: 0; pointer-events: none; }
+.call-local {
+  position: absolute; right: 18px; bottom: 100px; width: 180px; aspect-ratio: 3 / 4;
+  object-fit: cover; border-radius: 16px; background: #000;
+  box-shadow: 0 12px 34px rgba(0,0,0,0.45); transform: scaleX(-1);
+}
+.call-controls, .call-incoming-actions {
+  position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%);
+  display: flex; gap: 16px; align-items: center;
+}
+.call-ctl {
+  width: 56px; height: 56px; border: 0; border-radius: 50%;
+  background: rgba(255,255,255,0.14); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(10px); transition: transform 0.15s, background 0.15s;
+}
+.call-ctl .ico { width: 22px; height: 22px; }
+.call-ctl:hover { background: rgba(255,255,255,0.24); transform: scale(1.05); }
+.call-ctl.hangup, .call-ctl.decline { background: #e14b5a; }
+.call-ctl.accept { background: #139a6d; }
+.call-ctl.off { background: rgba(225,75,90,0.65); }
+.call-ctl.hidden, .call-incoming-actions.hidden, .call-controls.hidden { display: none; }
+@media (max-width: 640px) {
+  .call-card { height: 100dvh; width: 100%; border-radius: 0; }
+  .call-backdrop { padding: 0; }
+  .call-local { width: 110px; bottom: 104px; right: 12px; }
+  .call-controls, .call-incoming-actions { bottom: 22px; gap: 12px; }
+  .call-ctl { width: 52px; height: 52px; }
+  .call-btn#call-video-btn { display: none; }
+}

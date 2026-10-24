@@ -170,6 +170,8 @@
                 </span>
               </button>
               <div class="chat-actions">
+                <button class="icon-btn call-btn" id="call-voice-btn" title="Аудиозвонок" data-icon="phone"></button>
+                <button class="icon-btn call-btn" id="call-video-btn" title="Видеозвонок" data-icon="video"></button>
                 <button class="icon-btn" id="bookmarks-btn" title="Сохранённые сообщения" data-icon="bookmark"></button>
                 <button class="icon-btn" id="focus-btn" title="Режим фокуса (F)" data-icon="focus"></button>
                 <button class="icon-btn" id="chat-search-btn" title="Поиск в чате" data-icon="search"></button>
@@ -220,6 +222,28 @@
           </button>
         </main>
       </section>
+    </div>
+
+    <!-- ══════════════════ CALL ══════════════════ -->
+    <div class="call-backdrop hidden" id="call-backdrop">
+      <div class="call-card" id="call-card">
+        <video id="call-remote-video" class="call-remote" autoplay playsinline></video>
+        <div class="call-placeholder" id="call-placeholder">
+          <span class="avatar avatar-72" id="call-avatar">?</span>
+          <h3 id="call-peer-name">Звонок</h3>
+          <p id="call-status">Соединение…</p>
+        </div>
+        <video id="call-local-video" class="call-local" autoplay playsinline muted></video>
+        <div class="call-controls" id="call-controls">
+          <button class="call-ctl" id="call-mic" title="Микрофон" data-icon="mic"></button>
+          <button class="call-ctl" id="call-cam" title="Камера" data-icon="video"></button>
+          <button class="call-ctl hangup" id="call-hangup" title="Завершить" data-icon="phone-off"></button>
+        </div>
+        <div class="call-incoming-actions hidden" id="call-incoming-actions">
+          <button class="call-ctl decline" id="call-decline" title="Отклонить" data-icon="phone-off"></button>
+          <button class="call-ctl accept" id="call-accept" title="Ответить" data-icon="phone"></button>
+        </div>
+      </div>
     </div>
 
     <!-- ══════════════════ MODALS ══════════════════ -->
