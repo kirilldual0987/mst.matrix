@@ -281,7 +281,7 @@ export function renderEmojiPicker(container, { onPick }) {
     search.focus();
   });
 
-  container.addEventListener('click', (e) => {
+  container.onclick = (e) => {
     const tab = e.target.closest('.ep-tab');
     if (tab) {
       search.value = '';
@@ -294,5 +294,5 @@ export function renderEmojiPicker(container, { onPick }) {
       saveRecentEmoji(item.dataset.emoji);
       onPick(item.dataset.emoji);
     }
-  });
+  };
 }

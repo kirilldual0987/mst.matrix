@@ -1,5 +1,5 @@
 /* mst.matrix service worker: network-first with offline cache fallback. */
-const CACHE = 'mst-matrix-shell-v2';
+const CACHE = 'mst-matrix-shell-v3';
 const PRECACHE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './icon-512-maskable.png'];
 
 self.addEventListener('install', (event) => {
@@ -22,6 +22,8 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
+  // Never cache Matrix API traffic, even if the homeserver is same-origin.
+  if (url.pathname.includes('/_matrix/') || req.headers.get('authorization')) return;
 
   event.respondWith(
     fetch(req)
@@ -32,6 +34,12 @@ self.addEventListener('fetch', (event) => {
         }
         return res;
       })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+      .catch(() =>
+        caches.match(req).then((hit) => {
+          if (hit) return hit;
+          if (req.mode === 'navigate') return caches.match('./index.html');
+          return Response.error();
+        })
+      )
   );
 });

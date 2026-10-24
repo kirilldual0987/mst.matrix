@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#7c5cff" />
+    <meta name="theme-color" content="#6c4df6" />
     <meta name="description" content="mst.matrix — a modern, fast Matrix web client." />
     <title>mst.matrix — Matrix, beautifully</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%237c5cff'/%3E%3Ccircle cx='20' cy='32' r='6' fill='white'/%3E%3Ccircle cx='32' cy='32' r='6' fill='white' opacity='.7'/%3E%3Ccircle cx='44' cy='32' r='6' fill='white' opacity='.4'/%3E%3C/svg%3E" />
@@ -48,7 +48,7 @@
                 <label for="homeserver">Homeserver</label>
                 <div class="input-wrap">
                   <span class="input-icon" data-icon="server"></span>
-                  <input id="homeserver" name="homeserver" type="url" placeholder="https://matrix.org" value="https://matrix.org" required spellcheck="false" />
+                  <input id="homeserver" name="homeserver" type="text" inputmode="url" placeholder="https://matrix.org" value="https://matrix.org" required spellcheck="false" autocapitalize="none" />
                 </div>
               </div>
               <div class="field">
@@ -95,6 +95,7 @@
               <span>mst<span class="brand-dot">.</span>matrix</span>
             </a>
             <div class="head-actions">
+              <button class="icon-btn mobile-only" id="sidebar-close-btn" title="Закрыть меню" data-icon="x"></button>
               <button class="icon-btn" id="palette-btn" title="Команды (⌘K)" data-icon="command"></button>
               <button class="icon-btn" id="new-room-btn" title="Новая комната" data-icon="plus"></button>
               <button class="icon-btn" id="settings-btn" title="Настройки" data-icon="settings"></button>
@@ -195,7 +196,7 @@
             </div>
 
             <div class="composer-wrap">
-              <div id="typing" class="typing"></div>
+              <div id="typing" class="typing" aria-live="polite"></div>
               <div class="md-toolbar" id="md-toolbar" role="toolbar" aria-label="Форматирование">
                 <button type="button" class="md-btn" data-md="bold" title="Жирный · Ctrl+B" data-icon="bold"></button>
                 <button type="button" class="md-btn" data-md="italic" title="Курсив · Ctrl+I" data-icon="italic"></button>
@@ -224,19 +225,21 @@
       </section>
     </div>
 
+    <div class="connection-banner hidden" id="connection-banner" role="status">Нет соединения — сообщения могут не отправляться</div>
+
     <!-- ══════════════════ CALL ══════════════════ -->
-    <div class="call-backdrop hidden" id="call-backdrop">
+    <div class="call-backdrop hidden" id="call-backdrop" role="dialog" aria-modal="true" aria-labelledby="call-peer-name">
       <div class="call-card" id="call-card">
         <video id="call-remote-video" class="call-remote" autoplay playsinline></video>
         <div class="call-placeholder" id="call-placeholder">
           <span class="avatar avatar-72" id="call-avatar">?</span>
           <h3 id="call-peer-name">Звонок</h3>
-          <p id="call-status">Соединение…</p>
+          <p id="call-status" aria-live="polite">Соединение…</p>
         </div>
         <video id="call-local-video" class="call-local" autoplay playsinline muted></video>
         <div class="call-controls" id="call-controls">
-          <button class="call-ctl" id="call-mic" title="Микрофон" data-icon="mic"></button>
-          <button class="call-ctl" id="call-cam" title="Камера" data-icon="video"></button>
+          <button class="call-ctl" id="call-mic" title="Микрофон" aria-pressed="false" data-icon="mic"></button>
+          <button class="call-ctl" id="call-cam" title="Камера" aria-pressed="false" data-icon="video"></button>
           <button class="call-ctl hangup" id="call-hangup" title="Завершить" data-icon="phone-off"></button>
         </div>
         <div class="call-incoming-actions hidden" id="call-incoming-actions">
@@ -569,10 +572,10 @@
       <div class="command-panel" role="dialog" aria-modal="true" aria-label="Командная палитра">
         <div class="command-input-row">
           <span class="command-ico" data-icon="command"></span>
-          <input id="command-input" type="text" placeholder="Команда, комната или действие…" autocomplete="off" spellcheck="false" />
+          <input id="command-input" type="text" placeholder="Команда, комната или действие…" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" />
           <kbd>esc</kbd>
         </div>
-        <div class="command-results" id="command-results"></div>
+        <div class="command-results" id="command-results" role="listbox"></div>
         <div class="command-foot"><span>↑↓</span> навигация <span>Enter</span> открыть <span>Esc</span> закрыть</div>
       </div>
     </div>

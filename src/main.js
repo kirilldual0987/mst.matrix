@@ -296,7 +296,7 @@ function avatarHtml(name, mxcOrUrl, cls = '') {
     : '';
   if (url) {
     const isMxc = String(mxcOrUrl || '').startsWith('mxc://');
-    return `<span class="avatar ${cls}" style="--av:${hue}"><img src="${escapeAttr(url)}" alt="" loading="lazy" ${isMxc ? `data-avatar-mxc="${escapeAttr(mxcOrUrl)}" data-media-w="96" data-media-h="96" data-media-method="crop"` : ''} /></span>`;
+    return `<span class="avatar ${cls}" style="--av:${hue}"><img src="${escapeAttr(url)}" alt="" loading="lazy" data-avatar-fallback="${escapeAttr(initials(name))}" ${isMxc ? `data-avatar-mxc="${escapeAttr(mxcOrUrl)}" data-media-w="96" data-media-h="96" data-media-method="crop"` : ''} /></span>`;
   }
   return `<span class="avatar ${cls}" style="--av:${hue}">${escapeHtml(initials(name))}</span>`;
 }
@@ -304,6 +304,12 @@ function avatarHtml(name, mxcOrUrl, cls = '') {
 function setIcon(el, name) {
   if (!el) return;
   el.innerHTML = icon(name);
+}
+
+function updateConnectionBanner() {
+  const banner = $('#connection-banner');
+  if (!banner) return;
+  banner.classList.toggle('hidden', navigator.onLine !== false);
 }
 
 function debounce(fn, ms = 60) {
@@ -387,16 +393,28 @@ function applyAccent() {
   });
 }
 
-function cycleTheme() {
-  const order = ['light', 'dark', 'system'];
-  state.prefs.theme = order[(order.indexOf(state.prefs.theme) + 1) % order.length];
-  applyTheme();
-  savePrefs();
-}
-
 /* ════════════════════════════════════════════════════════════
    Session
    ════════════════════════════════════════════════════════════ */
+function savedDeviceKey(homeserver, userId) {
+  return `mst.matrix.device.v1|${homeserver}|${userId}`;
+}
+
+function loadSavedDeviceId(homeserver, userId) {
+  try {
+    return localStorage.getItem(savedDeviceKey(homeserver, userId)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveDeviceId(homeserver, userId, deviceId) {
+  if (!deviceId) return;
+  try {
+    localStorage.setItem(savedDeviceKey(homeserver, userId), deviceId);
+  } catch {}
+}
+
 function saveSession(session, remember = true) {
   const json = JSON.stringify(session);
   try {
@@ -473,12 +491,15 @@ async function prepareCrypto(client) {
       await client.initRustCrypto({ useIndexedDB: true });
     }
     state.cryptoReady = !!client.getCrypto?.();
-    try {
-      await client.getCrypto().loadSessionBackupPrivateKeyFromSecretStorage();
-    } catch {}
-    try {
-      state.backupCheck = await client.getCrypto().checkKeyBackupAndEnable();
-    } catch {}
+    // Backup checks can be slow; do not block login/sync on them.
+    const crypto = client.getCrypto();
+    crypto.loadSessionBackupPrivateKeyFromSecretStorage().catch(() => {});
+    crypto.checkKeyBackupAndEnable()
+      .then((check) => {
+        state.backupCheck = check;
+        refreshBackupStatus();
+      })
+      .catch(() => {});
   } catch (err) {
     state.cryptoError = err?.message || String(err);
     console.warn('E2EE init unavailable:', err);
@@ -510,10 +531,12 @@ async function handleLogin(e) {
   setLoginLoading(true);
   try {
     const bootstrap = matrixcs.createClient({ baseUrl: homeserver, userId });
+    const existingDeviceId = loadSavedDeviceId(homeserver, userId);
     const loginResponse = await bootstrap.loginRequest({
       type: 'm.login.password',
       identifier: { type: 'm.id.user', user: userId },
       password,
+      ...(existingDeviceId ? { device_id: existingDeviceId } : {}),
       initial_device_display_name: 'mst.matrix web',
     });
     if (!loginResponse?.access_token || !loginResponse?.device_id) {
@@ -527,6 +550,7 @@ async function handleLogin(e) {
       deviceId: loginResponse.device_id,
     });
     state.userId = loginResponse.user_id || userId;
+    saveDeviceId(homeserver, state.userId, loginResponse.device_id);
     attachClient(client);
     await prepareCrypto(client);
     const ready = waitForPrepared(client);
@@ -545,6 +569,8 @@ async function handleLogin(e) {
     toast('Добро пожаловать в mst.matrix', 'success');
   } catch (err) {
     console.error(err);
+    try { state.client?.stopClient(); } catch {}
+    state.client = null;
     const code = err?.errcode || err?.data?.errcode || '';
     let msg = err?.message || 'Не удалось войти.';
     if (code === 'M_FORBIDDEN') msg = 'Неверный Matrix ID или пароль.';
@@ -562,8 +588,8 @@ async function restoreSession(session) {
   try {
     if (!session.deviceId) {
       clearSession();
-      setAuthError('Сессия устарела: войдите заново, чтобы включить E2EE.');
       showAuth();
+      setAuthError('Сессия устарела: войдите заново, чтобы включить E2EE.');
       return;
     }
     const client = matrixcs.createClient({
@@ -596,9 +622,7 @@ async function finishLogin() {
   $('#auth-view').classList.add('hidden');
   $('#app-view').classList.remove('hidden');
   await refreshProfile();
-  const voip = state.client.supportsVoip?.() !== false;
-  $('#call-voice-btn')?.classList.toggle('hidden', !voip);
-  $('#call-video-btn')?.classList.toggle('hidden', !voip);
+  updateCallButtons();
   state.client.getRooms().forEach(watchTypingMembers);
   renderRooms();
   const rooms = state.client.getRooms();
@@ -655,7 +679,7 @@ function attachClient(client) {
       return;
     }
 
-    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction' || type === 'm.sticker' || type === 'm.poll.start' || type === 'm.poll.response' || type === 'm.poll.end') {
+    if (type === 'm.room.message' || type === 'm.room.encrypted' || type === 'm.reaction' || type === 'm.sticker' || type === 'm.poll.start' || type === 'm.poll.response' || type === 'm.poll.end' || type === 'org.matrix.msc3381.poll.start' || type === 'org.matrix.msc3381.poll.response' || type === 'org.matrix.msc3381.poll.end') {
       if (type === 'm.room.message' || type === 'm.room.encrypted') watchEventUpdates(event, room);
       if (room.roomId === state.currentRoomId && !toStartOfTimeline) {
         scheduleMessages(false);
@@ -792,7 +816,8 @@ function roomPreview(room) {
     if (type !== 'm.room.message' && type !== 'm.room.encrypted') continue;
     if (content['m.relates_to']?.rel_type === 'm.replace') continue;
     let text = edits.get(ev.getId())?.body || content.body || '';
-    if (content.msgtype === 'm.image') text = 'Фото';
+    if (content['m.poll'] || content['org.matrix.msc3381.poll.start']) text = 'Опрос';
+    else if (content.msgtype === 'm.image') text = 'Фото';
     else if (type === 'm.sticker' || content.msgtype === 'm.sticker') text = 'Стикер';
     else if (content.msgtype === 'm.file') text = 'Файл';
     else if (content.msgtype === 'm.audio') text = content['org.matrix.msc3245.voice'] || !content.body ? 'Голосовое сообщение' : 'Аудио';
@@ -849,7 +874,14 @@ function renderRooms() {
   }, 0);
   document.title = totalUnread ? `(${totalUnread}) mst.matrix` : 'mst.matrix — Matrix, beautifully';
 
-  $('#rooms-empty').classList.toggle('hidden', visible.length !== 0);
+  const empty = $('#rooms-empty');
+  empty.classList.toggle('hidden', visible.length !== 0);
+  if (visible.length === 0) {
+    const label = empty.querySelector('p');
+    const action = $('#empty-new-room');
+    if (label) label.textContent = rooms.length ? 'Ничего не найдено' : 'Пока нет комнат';
+    if (action) action.textContent = rooms.length ? 'Сбросить поиск' : 'Создать комнату';
+  }
 
   if (!visible.length) {
     list.innerHTML = '';
@@ -930,9 +962,29 @@ function renderRoomHeader() {
     );
   }
   renderPinnedBar();
+  updateCallButtons();
+}
+
+function updateCallButtons() {
+  const room = getCurrentRoom();
+  const voip = !state.demo && state.client?.supportsVoip?.() !== false;
+  const oneToOne = !state.demo && (room?.getJoinedMemberCount?.() || 0) <= 2;
+  const show = voip && oneToOne;
+  $('#call-voice-btn')?.classList.toggle('hidden', !show);
+  $('#call-video-btn')?.classList.toggle('hidden', !show);
 }
 
 function selectRoom(roomId) {
+  if (!state.demo) {
+    const target = state.client?.getRoom(roomId);
+    const membership = target?.getMyMembership?.();
+    if (target && membership && membership !== 'join') {
+      toast('Комната недоступна: сначала примите приглашение', 'info');
+      return;
+    }
+  }
+  state.replyingTo = null;
+  renderReplyBanner();
   closeMentionPop();
   if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
   $$('.msg.tools-open').forEach((m) => m.classList.remove('tools-open'));
@@ -944,6 +996,7 @@ function selectRoom(roomId) {
   $('#empty-state').classList.add('hidden');
   $('#chat-view').classList.remove('hidden');
   renderRoomHeader();
+  updateCallButtons();
   renderMessages(true);
   renderRooms();
   closeSidebar();
@@ -969,7 +1022,9 @@ function showEmptyState() {
    Message model
    ════════════════════════════════════════════════════════════ */
 function clientRooms() {
-  return (state.client?.getRooms() || []).filter((room) => !room.isSpaceRoom?.());
+  return (state.client?.getRooms() || []).filter(
+    (room) => !room.isSpaceRoom?.() && room.getMyMembership?.() === 'join'
+  );
 }
 
 function getCurrentRoom() {
@@ -1020,7 +1075,7 @@ function buildTimeline(room) {
 
   for (const ev of events) {
     const type = ev.getType();
-    if (type === 'm.poll.response') {
+    if (type === 'm.poll.response' || type === 'org.matrix.msc3381.poll.response') {
       const rel = ev.getContent()?.['m.relates_to'];
       const target = rel?.event_id;
       if (target) {
@@ -1033,7 +1088,7 @@ function buildTimeline(room) {
       }
       continue;
     }
-    if (type === 'm.poll.end') {
+    if (type === 'm.poll.end' || type === 'org.matrix.msc3381.poll.end') {
       const rel = ev.getContent()?.['m.relates_to'];
       if (rel?.event_id) pollEnded.add(rel.event_id);
       continue;
@@ -1064,7 +1119,7 @@ function buildTimeline(room) {
   const messages = [];
   for (const ev of events) {
     const type = ev.getType();
-    if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.sticker' && type !== 'm.poll.start') continue;
+    if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.sticker' && type !== 'm.poll.start' && type !== 'org.matrix.msc3381.poll.start') continue;
     const content = ev.getContent() || {};
     const rel = content['m.relates_to'];
     if (rel?.rel_type === 'm.replace') continue;
@@ -1086,7 +1141,7 @@ function buildTimeline(room) {
       sender: ev.getSender(),
       senderName: member?.name || ev.getSender(),
       ts: ev.getTs(),
-      msgtype: finalContent.msgtype || (type === 'm.poll.start' ? 'm.poll' : type === 'm.sticker' ? 'm.sticker' : type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
+      msgtype: finalContent.msgtype || (type === 'm.poll.start' || type === 'org.matrix.msc3381.poll.start' ? 'm.poll' : type === 'm.sticker' ? 'm.sticker' : type === 'm.room.encrypted' ? 'm.room.encrypted' : 'm.text'),
       body: finalContent.body || '',
       content: finalContent,
       own: ev.getSender() === state.userId,
@@ -1094,7 +1149,7 @@ function buildTimeline(room) {
       edited: !!edit,
       reactions: reactionObj,
       threadRoot: rel?.rel_type === 'm.thread' ? rel.event_id : null,
-      poll: type === 'm.poll.start'
+      poll: (type === 'm.poll.start' || type === 'org.matrix.msc3381.poll.start')
         ? { responses: pollResponses.get(ev.getId()) || [], ended: pollEnded.has(ev.getId()) }
         : undefined,
       encrypted: type === 'm.room.encrypted',
@@ -1177,15 +1232,22 @@ function audioPlayerHtml(msg) {
 
 function pollHtml(msg) {
   const c = msg.content || {};
-  const poll = c['m.poll'] || {};
+  const poll = c['m.poll'] || c['org.matrix.msc3381.poll.start'] || {};
   const answers = poll.answers || [];
+  const question = typeof poll.question === 'string'
+    ? poll.question
+    : poll.question?.['m.text'] || poll.question?.['org.matrix.msc1767.text'] || 'Опрос';
   const responses = msg.poll?.responses || [];
   const ended = msg.poll?.ended || !!c['org.matrix.msc3381.poll.end'];
-  const myVote = responses.find((r) => r.sender === state.userId);
+  // Only the latest response from each sender counts.
+  const latestBySender = new Map();
+  for (const r of responses) latestBySender.set(r.sender, r);
+  const effective = [...latestBySender.values()];
+  const myVote = effective.find((r) => r.sender === state.userId);
   const mySelections = new Set(myVote?.selections || []);
   const counts = new Map();
   let total = 0;
-  for (const r of responses) {
+  for (const r of effective) {
     const unique = new Set(r.selections || []);
     for (const sel of unique) {
       counts.set(sel, (counts.get(sel) || 0) + 1);
@@ -1195,7 +1257,7 @@ function pollHtml(msg) {
   const winner = Math.max(...([...counts.values(), 0]));
   return `
     <div class="poll">
-      <div class="poll-question">${escapeHtml(poll.question || 'Опрос')}</div>
+      <div class="poll-question">${escapeHtml(question)}</div>
       <div class="poll-options">
         ${answers.map((a) => {
           const id = a.id;
@@ -1206,7 +1268,7 @@ function pollHtml(msg) {
           return `
             <button type="button" class="poll-option ${chosen ? 'chosen' : ''} ${leading ? 'leading' : ''}" data-poll-vote="${escapeAttr(msg.id)}" data-answer="${escapeAttr(id)}" ${ended ? 'disabled' : ''}>
               <span class="poll-bar" style="width:${ended || chosen || myVote ? pct : 0}%"></span>
-              <span class="poll-text">${escapeHtml(a['org.matrix.msc1767.text'] || a.text || id)}</span>
+              <span class="poll-text">${escapeHtml(a['org.matrix.msc1767.text'] || a['m.text'] || a.text || id)}</span>
               <span class="poll-count">${count} · ${pct}%</span>
             </button>`;
         }).join('')}
@@ -1271,8 +1333,11 @@ function readReceiptHtml(msg) {
   if (!room) return '';
   const event = room.findEventById?.(msg.id);
   if (!event) return '';
-  if (event.status !== null && event.status !== undefined) {
+  if (['sending', 'queued', 'encrypting'].includes(event.status)) {
     return `<span class="read-mark pending" title="Отправляется…">${icon('clock')}</span>`;
+  }
+  if (['not_sent', 'cancelled'].includes(event.status)) {
+    return `<span class="read-mark failed" title="Не отправлено">${icon('alert')}</span>`;
   }
   const receipts = room.getReceiptsForEvent?.(event) || [];
   const readers = receipts.filter((r) => r.userId !== state.userId && (r.type === 'm.read' || !r.type));
@@ -1306,7 +1371,7 @@ function messageHtml(msg, grouped, opts = {}) {
     </div>` : '';
 
   return `<div class="msg ${own ? 'own' : ''} ${grouped ? 'grouped' : ''}" data-event-id="${escapeAttr(msg.id)}">
-    <div class="msg-avatar" data-user-id="${escapeAttr(msg.sender)}" title="Профиль">${avatarHtml(msg.senderName || msg.sender)}</div>
+    <div class="msg-avatar" data-user-id="${escapeAttr(msg.sender)}" title="Профиль" role="button" tabindex="0">${avatarHtml(msg.senderName || msg.sender)}</div>
     <div class="msg-main">
       <div class="msg-head">
         <span class="msg-sender" data-user-id="${escapeAttr(msg.sender)}" role="button" tabindex="0">${escapeHtml(name)}</span>
@@ -1586,6 +1651,7 @@ function scheduleReadReceipt(room, immediate = false) {
   if (!room || state.demo || !state.client) return;
   const roomId = room.roomId;
   const send = () => {
+    if (!state.client) return;
     const events = (room.timeline || []).filter((e) => e.getType() === 'm.room.message' || e.getType() === 'm.room.encrypted');
     const last = events[events.length - 1];
     if (!last) return;
@@ -1632,6 +1698,14 @@ async function loadAuthenticatedMedia(img) {
     img.src = objectUrl;
   } catch (err) {
     console.warn('Authenticated media failed', err);
+    if (img.dataset.avatarFallback) {
+      const fallback = img.dataset.avatarFallback;
+      const parent = img.parentElement;
+      if (parent) {
+        img.remove();
+        parent.textContent = fallback;
+      }
+    }
   }
 }
 
@@ -1640,6 +1714,12 @@ async function loadAuthenticatedMedia(img) {
    ════════════════════════════════════════════════════════════ */
 function notifyNewMessage(room, event) {
   if (document.hasFocus() && room.roomId === state.currentRoomId) return;
+  const level = roomNotifLevel(room.roomId);
+  if (level === 'mute') return;
+  if (level === 'mention') {
+    const highlight = event.getPushActions?.()?.tweaks?.highlight;
+    if (!highlight) return;
+  }
 
   const sender = room.getMember?.(event.getSender())?.name || event.getSender();
   let body = event.getContent()?.body || 'Новое сообщение';
@@ -1732,8 +1812,9 @@ function roomIsEncrypted(roomId) {
   }
 }
 
-async function sendAttachment(file, msgtype, extra = {}) {
-  const roomId = state.currentRoomId;
+async function sendAttachment(file, msgtype, extra = {}, roomIdArg = null) {
+  const roomId = roomIdArg || state.currentRoomId;
+  if (!roomId) throw new Error('Не выбрана комната');
   const encryptedRoom = roomIsEncrypted(roomId);
   let uploadSource = file;
   let fileInfo = null;
@@ -1790,12 +1871,13 @@ async function sendMessage() {
   if (!text && !files.length) return;
   if (!state.currentRoomId) return;
 
-  const replyId = state.replyingTo?.id || null;
+  const targetRoomId = state.currentRoomId;
+  const replyId = state.replyingTo?.roomId === targetRoomId ? state.replyingTo.id : null;
   state.replyingTo = null;
   renderReplyBanner();
 
   input.value = '';
-  delete state.drafts[state.currentRoomId];
+  delete state.drafts[targetRoomId];
   saveDrafts();
   resizeComposer();
   state.pendingFiles = [];
@@ -1804,7 +1886,8 @@ async function sendMessage() {
   stopTypingState();
 
   if (state.demo) {
-    const room = getCurrentRoom();
+    const room = state.demoRooms.find((r) => r.id === targetRoomId);
+    if (!room) return;
     const demoContent = { msgtype: 'm.text', body: text };
     if (replyId) demoContent['m.relates_to'] = { 'm.in_reply_to': { event_id: replyId } };
     room.messages.push({
@@ -1827,7 +1910,7 @@ async function sendMessage() {
     if (text) {
       const content = { msgtype: 'm.text', body: text };
       if (replyId) content['m.relates_to'] = { 'm.in_reply_to': { event_id: replyId } };
-      await state.client.sendEvent(state.currentRoomId, 'm.room.message', content);
+      await state.client.sendEvent(targetRoomId, 'm.room.message', content);
     }
 
     for (const file of files) {
@@ -1836,7 +1919,7 @@ async function sendMessage() {
       if (mime.startsWith('image/')) msgtype = 'm.image';
       else if (mime.startsWith('audio/')) msgtype = 'm.audio';
       else if (mime.startsWith('video/')) msgtype = 'm.video';
-      await sendAttachment(file, msgtype, { body: file.name });
+      await sendAttachment(file, msgtype, { body: file.name }, targetRoomId);
     }
 
     renderMessages(true);
@@ -1949,12 +2032,14 @@ function finishVoiceRecording(send = true) {
 
 async function sendVoiceMessage(blob, duration) {
   if (!state.currentRoomId) return;
+  const targetRoomId = state.currentRoomId;
   const mime = blob.type || 'audio/webm';
   const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
   const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: mime });
 
   if (state.demo) {
-    const room = getCurrentRoom();
+    const room = state.demoRooms.find((r) => r.id === targetRoomId);
+    if (!room) return;
     const url = URL.createObjectURL(blob);
     room.messages.push({
       id: `demo-voice-${Date.now()}`,
@@ -1983,7 +2068,7 @@ async function sendVoiceMessage(blob, duration) {
       body: 'Голосовое сообщение',
       voice: true,
       info: { duration },
-    });
+    }, targetRoomId);
     renderMessages(true);
   } catch (err) {
     console.error(err);
@@ -2266,6 +2351,7 @@ function openThreadModal(rootEventId) {
   ].join('');
   $('#thread-input').value = '';
   $('#thread-input').dataset.threadRoot = rootEventId;
+  $('#thread-input').dataset.threadRoom = room.roomId;
   openModal('thread-modal');
   setTimeout(() => $('#thread-input')?.focus(), 60);
 }
@@ -2273,10 +2359,11 @@ function openThreadModal(rootEventId) {
 async function sendThreadReply() {
   const input = $('#thread-input');
   const rootId = input?.dataset.threadRoot;
+  const targetRoomId = input?.dataset.threadRoom || state.currentRoomId;
   const text = input?.value.trim();
-  if (!rootId || !text || !state.currentRoomId) return;
+  if (!rootId || !text || !targetRoomId) return;
   try {
-    await state.client.sendEvent(state.currentRoomId, rootId, 'm.room.message', {
+    await state.client.sendEvent(targetRoomId, rootId, 'm.room.message', {
       msgtype: 'm.text',
       body: text,
       'm.relates_to': { rel_type: 'm.thread', event_id: rootId },
@@ -2368,7 +2455,7 @@ async function handleMessageAction(action, eventId, el) {
   const roomId = state.currentRoomId;
 
   if (action === 'reply') {
-    state.replyingTo = { id: msg.id, name: msg.own ? 'Вы' : msg.senderName, body: msg.body };
+    state.replyingTo = { id: msg.id, roomId: state.currentRoomId, name: msg.own ? 'Вы' : msg.senderName, body: msg.body };
     renderReplyBanner();
     $('#message-input')?.focus();
     return;
@@ -2455,22 +2542,38 @@ async function handleMessageAction(action, eventId, el) {
 
 async function votePoll(startEventId, answerId) {
   if (!startEventId || !answerId) return;
+
+  function nextSelections(msg) {
+    const max = msg?.content?.['m.poll']?.max_selections || 1;
+    if (max <= 1) return [answerId];
+    const mine = (msg?.poll?.responses || []).filter((r) => r.sender === state.userId).pop()
+      || (msg?.pollResponses || []).filter((r) => r.sender === '@you:matrix.org').pop();
+    const set = new Set(mine?.selections || []);
+    if (set.has(answerId)) set.delete(answerId);
+    else set.add(answerId);
+    return [...set];
+  }
+
   if (state.demo) {
     const room = getCurrentRoom();
     const msg = room?.messages?.find((m) => m.id === startEventId);
     if (!msg) return;
+    const selections = nextSelections(msg);
     const list = msg.pollResponses || [];
     const mine = list.find((r) => r.sender === '@you:matrix.org');
-    if (mine) mine.selections = [answerId];
-    else list.push({ sender: '@you:matrix.org', selections: [answerId] });
+    if (mine) mine.selections = selections;
+    else list.push({ sender: '@you:matrix.org', selections });
     msg.pollResponses = list;
     renderMessages(false);
     return;
   }
+  const room = getCurrentRoom();
+  const msg = room ? buildTimeline(room).find((m) => m.id === startEventId) : null;
+  const selections = nextSelections(msg);
   try {
     await state.client.sendEvent(state.currentRoomId, 'm.poll.response', {
       'm.relates_to': { rel_type: 'm.reference', event_id: startEventId },
-      'm.selections': [answerId],
+      'm.selections': selections,
     });
     renderMessages(false);
   } catch (err) {
@@ -2480,17 +2583,18 @@ async function votePoll(startEventId, answerId) {
 
 async function endPoll(startEventId) {
   if (!startEventId) return;
+  const targetRoomId = state.currentRoomId;
   if (state.demo) {
-    const room = getCurrentRoom();
+    const room = state.demoRooms.find((r) => r.id === targetRoomId);
     const msg = room?.messages?.find((m) => m.id === startEventId);
     if (msg) msg.pollEnded = true;
     renderMessages(false);
     return;
   }
   const ok = await confirmDialog('Завершить опрос?', 'После завершения голосовать будет нельзя.', 'Завершить');
-  if (!ok) return;
+  if (!ok || !targetRoomId) return;
   try {
-    await state.client.sendEvent(state.currentRoomId, 'm.poll.end', {
+    await state.client.sendEvent(targetRoomId, 'm.poll.end', {
       'm.relates_to': { rel_type: 'm.reference', event_id: startEventId },
       'org.matrix.msc3381.poll.end': {},
     });
@@ -2633,6 +2737,7 @@ function openEmojiPicker(anchor, targetEventId = null) {
     },
   });
 
+  setTimeout(() => pop.querySelector('.ep-search')?.focus(), 50);
   const rect = anchor?.getBoundingClientRect();
   const width = pop.offsetWidth || 330;
   const height = pop.offsetHeight || 400;
@@ -2689,10 +2794,12 @@ function openMentionPop(items, tokenStart, query) {
   mentionState.tokenStart = tokenStart;
   mentionState.query = query;
   pop.classList.remove('hidden');
+  pop.setAttribute('role', 'listbox');
+  $('#message-input')?.setAttribute('aria-expanded', 'true');
   pop.innerHTML = items
     .slice(0, 8)
     .map((item, i) => `
-      <button type="button" class="mention-item ${i === 0 ? 'active' : ''}" data-mention-index="${i}" data-mention-id="${escapeAttr(item.id)}">
+      <button type="button" class="mention-item ${i === 0 ? 'active' : ''}" role="option" aria-selected="${i === 0}" data-mention-index="${i}" data-mention-id="${escapeAttr(item.id)}">
         ${item.avatar ? `<img class="mention-avatar" src="${escapeAttr(mxcToUrl(item.avatar, 48, 48, 'crop'))}" alt="" />` : avatarHtml(item.name || item.id, item.avatar, 'avatar-36').replace('class="avatar avatar-36"', 'class="avatar avatar-36 mention-avatar"')}
         <span class="mention-name">${escapeHtml(item.name || item.id)}</span>
         <span class="mention-id">${escapeHtml(item.id)}</span>
@@ -2704,6 +2811,7 @@ function closeMentionPop() {
   const pop = $('#mention-pop');
   mentionState.open = false;
   pop?.classList.add('hidden');
+  $('#message-input')?.setAttribute('aria-expanded', 'false');
 }
 
 function mentionCaretContext(input) {
@@ -2750,7 +2858,10 @@ const scheduleMentions = debounce(() => {
 function moveMention(delta) {
   if (!mentionState.open || !mentionState.items.length) return;
   mentionState.index = (mentionState.index + delta + mentionState.items.length) % mentionState.items.length;
-  $$('#mention-pop .mention-item').forEach((el, i) => el.classList.toggle('active', i === mentionState.index));
+  $$('#mention-pop .mention-item').forEach((el, i) => {
+    el.classList.toggle('active', i === mentionState.index);
+    el.setAttribute('aria-selected', String(i === mentionState.index));
+  });
   $('#mention-pop .mention-item.active')?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -2788,9 +2899,14 @@ function initMentionPop() {
     const item = e.target.closest('[data-mention-index]');
     if (item) {
       mentionState.index = Number(item.dataset.mentionIndex);
-      $$('#mention-pop .mention-item').forEach((el, i) => el.classList.toggle('active', i === mentionState.index));
+      $$('#mention-pop .mention-item').forEach((el, i) => {
+        el.classList.toggle('active', i === mentionState.index);
+        el.setAttribute('aria-selected', String(i === mentionState.index));
+      });
     }
   });
+  $('#message-input')?.setAttribute('aria-controls', 'mention-pop');
+  $('#message-input')?.setAttribute('aria-expanded', 'false');
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -2986,7 +3102,9 @@ function openSpace(spaceId) {
 
 function invitedRooms() {
   if (state.demo) return [];
-  return clientRooms().filter((room) => room.getMyMembership?.() === 'invite');
+  return (state.client?.getRooms() || []).filter(
+    (room) => !room.isSpaceRoom?.() && room.getMyMembership?.() === 'invite'
+  );
 }
 
 function renderInvites() {
@@ -3442,11 +3560,13 @@ function updateCallFeeds() {
   const remote = call.remoteUsermediaFeed?.stream || call.getRemoteFeeds?.()[0]?.stream || null;
   const local = call.localUsermediaStream || call.getLocalFeeds?.()[0]?.stream || null;
 
+  const hasRemoteVideo = !!remote?.getVideoTracks?.().length;
   if (remoteVideo && remote) {
     if (remoteVideo.srcObject !== remote) remoteVideo.srcObject = remote;
-    remoteVideo.classList.toggle('audio-only', !remote.getVideoTracks().length);
+    remoteVideo.classList.toggle('audio-only', !hasRemoteVideo);
     remoteVideo.play?.().catch(() => {});
   }
+  $('#call-placeholder')?.classList.toggle('connected', hasRemoteVideo);
   if (localVideo) {
     if (local && localVideo.srcObject !== local) localVideo.srcObject = local;
     const hide = !local || call.isLocalVideoMuted?.() || call.type === 'voice';
@@ -3455,9 +3575,15 @@ function updateCallFeeds() {
   }
 
   const camBtn = $('#call-cam');
-  if (camBtn) camBtn.classList.toggle('off', !!call.isLocalVideoMuted?.());
+  if (camBtn) {
+    camBtn.classList.toggle('off', !!call.isLocalVideoMuted?.());
+    camBtn.setAttribute('aria-pressed', String(!!call.isLocalVideoMuted?.()));
+  }
   const micBtn = $('#call-mic');
-  if (micBtn) micBtn.classList.toggle('off', !!call.isMicrophoneMuted?.());
+  if (micBtn) {
+    micBtn.classList.toggle('off', !!call.isMicrophoneMuted?.());
+    micBtn.setAttribute('aria-pressed', String(!!call.isMicrophoneMuted?.()));
+  }
 }
 
 function updateCallUI() {
@@ -3474,7 +3600,6 @@ function updateCallUI() {
     startCallTimer();
     $('#call-incoming-actions')?.classList.add('hidden');
     $('#call-controls')?.classList.remove('hidden');
-    $('#call-placeholder')?.classList.add('connected');
   }
   if (call.state === 'ended') {
     closeCallUI();
@@ -3497,7 +3622,9 @@ function bindCallListeners(call) {
 function showCallUI(incoming) {
   const backdrop = $('#call-backdrop');
   if (!backdrop) return;
+  if (backdrop.classList.contains('hidden')) overlayState.callReturnFocus = document.activeElement;
   backdrop.classList.remove('hidden');
+  updateBackgroundInert();
   $('#call-card')?.classList.toggle('incoming', incoming);
   $('#call-incoming-actions')?.classList.toggle('hidden', !incoming);
   $('#call-controls')?.classList.toggle('hidden', incoming);
@@ -3510,6 +3637,10 @@ function showCallUI(incoming) {
   }
   setCallAvatar();
   updateCallFeeds();
+  setTimeout(() => {
+    const target = incoming ? $('#call-accept') : $('#call-hangup');
+    target?.focus?.();
+  }, 80);
 }
 
 function startRingtone() {
@@ -3530,7 +3661,11 @@ function closeCallUI() {
   const local = $('#call-local-video');
   if (remote) remote.srcObject = null;
   if (local) local.srcObject = null;
+  const wasOpen = !$('#call-backdrop')?.classList.contains('hidden');
   $('#call-backdrop')?.classList.add('hidden');
+  updateBackgroundInert();
+  if (wasOpen && overlayState.callReturnFocus?.isConnected) overlayState.callReturnFocus.focus?.();
+  overlayState.callReturnFocus = null;
   state.call = { call: null, incoming: false, video: false, startedAt: 0, timer: null, ringTimer: null, bound: state.call.bound };
 }
 
@@ -3549,6 +3684,11 @@ async function startCall(video = false) {
   }
   if (state.call.call) {
     toast('Звонок уже идёт', 'info');
+    return;
+  }
+  const room = getCurrentRoom();
+  if ((room?.getJoinedMemberCount?.() || 0) > 2) {
+    toast('Звонки 1:1 доступны в личных чатах (два участника)', 'info');
     return;
   }
   let call;
@@ -3817,7 +3957,7 @@ async function openDeviceVerify(userId) {
       const status = await crypto.getDeviceVerificationStatus(userId, device.deviceId).catch(() => null);
       rows.push(`
         <div class="device-row">
-          <span class="device-main"><strong>${escapeHtml(device.getDisplayName?.() || device.deviceId)}</strong><small>${escapeHtml(device.deviceId)} · ${escapeHtml(deviceTrustLabel(status))}</small></span>
+          <span class="device-main"><strong>${escapeHtml(device.displayName || device.deviceId)}</strong><small>${escapeHtml(device.deviceId)} · ${escapeHtml(deviceTrustLabel(status))}</small></span>
           <button class="btn btn-primary btn-sm" data-verify-device="${escapeAttr(device.deviceId)}">Проверить</button>
         </div>`);
     }
@@ -4122,21 +4262,83 @@ async function leaveRoom(roomId) {
 /* ════════════════════════════════════════════════════════════
    Modals
    ════════════════════════════════════════════════════════════ */
+const overlayState = { modalReturnFocus: null, commandReturnFocus: null, callReturnFocus: null };
+
+function getFocusable(root) {
+  if (!root) return [];
+  return [...root.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((el) => el.offsetParent !== null && !el.closest('.hidden'));
+}
+
+function trapFocus(root, event) {
+  if (event.key !== 'Tab') return;
+  const items = getFocusable(root);
+  if (!items.length) {
+    event.preventDefault();
+    root.focus?.();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !root.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !root.contains(active))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function updateBackgroundInert() {
+  const app = $('#app-view');
+  if (!app) return;
+  const overlayOpen =
+    !$('#modal-backdrop')?.classList.contains('hidden') ||
+    !$('#command-palette')?.classList.contains('hidden') ||
+    !$('#call-backdrop')?.classList.contains('hidden');
+  if ('inert' in app) app.inert = overlayOpen;
+}
+
+function modalTrapHandler(event) {
+  if (event.key !== 'Tab') return;
+  const modal = $('#modal-backdrop .modal:not(.hidden)');
+  if (modal) trapFocus(modal, event);
+}
+
 function openModal(id) {
   const backdrop = $('#modal-backdrop');
+  if (backdrop.classList.contains('hidden')) {
+    overlayState.modalReturnFocus = document.activeElement;
+    document.addEventListener('keydown', modalTrapHandler);
+  }
   backdrop.classList.remove('hidden');
   $$('.modal', backdrop).forEach((m) => m.classList.add('hidden'));
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove('hidden');
   document.body.classList.add('modal-open');
+  updateBackgroundInert();
+  setTimeout(() => {
+    const target = document.getElementById(id);
+    const focusable = getFocusable(target);
+    (focusable[0] || target)?.focus?.();
+  }, 60);
 }
 
 function closeModals() {
+  const wasOpen = !$('#modal-backdrop')?.classList.contains('hidden');
   $('#modal-backdrop')?.classList.add('hidden');
   $$('.modal').forEach((m) => m.classList.add('hidden'));
   const emoji = $('#emoji-pop');
   emoji?.classList.add('hidden');
   document.body.classList.remove('modal-open');
+  updateBackgroundInert();
+  if (wasOpen) {
+    document.removeEventListener('keydown', modalTrapHandler);
+    if (overlayState.modalReturnFocus?.isConnected) overlayState.modalReturnFocus.focus?.();
+    overlayState.modalReturnFocus = null;
+  }
 }
 
 function openSecuritySettings() {
@@ -4236,17 +4438,17 @@ function openRoomInfo() {
         <div class="info-row">${icon('hash')}<span>${escapeHtml(room.roomId)}</span></div>
         <div class="info-row">${icon('users')}<span>${members.length} участников</span></div>
       </div>
-      <div class="settings-label">Участники</div>      <div class="settings-label">Уведомления</div>
-      <div class="segmented" id="room-notif-seg" role="group" aria-label="Уведомления">
-        <button data-notif="all" class="active">Все</button>
-        <button data-notif="mention">Упоминания</button>
-        <button data-notif="mute">Выкл</button>
-      </div>
-
+      <div class="settings-label">Участники</div>
       <div class="member-list">
         ${members.slice(0, 80).map((m) => `
           <div class="member-row" data-member="${escapeAttr(m.userId)}" role="button" tabindex="0">${avatarHtml(m.name, m.getAvatarUrl?.(state.client.getHomeserverUrl(), 64, 64, 'crop'))}
           <span>${escapeHtml(m.name)}${m.userId === state.userId ? ' (вы)' : ''}</span><small>${m.powerLevel >= 100 ? 'Админ' : ''}</small></div>`).join('')}
+      </div>
+      <div class="settings-label">Уведомления</div>
+      <div class="segmented" id="room-notif-seg" role="group" aria-label="Уведомления">
+        <button data-notif="all" class="active">Все</button>
+        <button data-notif="mention">Упоминания</button>
+        <button data-notif="mute">Выкл</button>
       </div>
       <div class="settings-label">Пригласить пользователя</div>
       <div class="invite-row"><input id="invite-user" type="text" placeholder="@user:matrix.org" /><button class="btn btn-soft btn-sm" id="invite-btn">Пригласить</button></div>
@@ -4425,17 +4627,26 @@ function allCommands() {
 function openCommandPalette() {
   const palette = $('#command-palette');
   if (!palette) return;
+  if (palette.classList.contains('hidden')) overlayState.commandReturnFocus = document.activeElement;
   palette.classList.remove('hidden');
+  updateBackgroundInert();
   const input = $('#command-input');
   if (input) {
     input.value = '';
+    input.setAttribute('aria-expanded', 'true');
     renderCommands('');
     setTimeout(() => input.focus(), 30);
   }
 }
 
 function closeCommandPalette() {
-  $('#command-palette')?.classList.add('hidden');
+  const palette = $('#command-palette');
+  if (!palette || palette.classList.contains('hidden')) return;
+  palette.classList.add('hidden');
+  $('#command-input')?.setAttribute('aria-expanded', 'false');
+  updateBackgroundInert();
+  if (overlayState.commandReturnFocus?.isConnected) overlayState.commandReturnFocus.focus?.();
+  overlayState.commandReturnFocus = null;
 }
 
 function renderCommands(query = '') {
@@ -4455,10 +4666,11 @@ function renderCommands(query = '') {
     return;
   }
   results.innerHTML = items.map((cmd, i) => `
-    <button class="command-item ${i === 0 ? 'active' : ''}" data-command-index="${i}">
+    <button class="command-item ${i === 0 ? 'active' : ''}" id="cmd-item-${i}" role="option" aria-selected="${i === 0}" data-command-index="${i}">
       <span class="cmd-ico">${icon(cmd.icon || 'command')}</span>
       <span class="cmd-text"><strong>${escapeHtml(cmd.title)}</strong><small>${escapeHtml(cmd.subtitle || '')}</small></span>
     </button>`).join('');
+  $('#command-input')?.setAttribute('aria-activedescendant', 'cmd-item-0');
 }
 
 function selectCommand(index) {
@@ -4471,8 +4683,13 @@ function selectCommand(index) {
 function moveCommand(delta) {
   if (!state.commandItems.length) return;
   state.commandIndex = (state.commandIndex + delta + state.commandItems.length) % state.commandItems.length;
-  $$('#command-results .command-item').forEach((el, i) => el.classList.toggle('active', i === state.commandIndex));
-  $('#command-results .command-item.active')?.scrollIntoView({ block: 'nearest' });
+  $$('#command-results .command-item').forEach((el, i) => {
+    el.classList.toggle('active', i === state.commandIndex);
+    el.setAttribute('aria-selected', String(i === state.commandIndex));
+  });
+  const active = $('#command-results .command-item.active');
+  active?.scrollIntoView({ block: 'nearest' });
+  if (active) $('#command-input')?.setAttribute('aria-activedescendant', active.id);
 }
 
 function enterFocusMode() {
@@ -4542,12 +4759,33 @@ function openRecap() {
 /* ════════════════════════════════════════════════════════════
    Sidebar mobile
    ════════════════════════════════════════════════════════════ */
+function sidebarIsMobile() {
+  return window.matchMedia('(max-width: 900px)').matches;
+}
+
+function syncSidebarA11y(open = null) {
+  const sidebar = $('#sidebar');
+  const app = $('#app-view');
+  if (!sidebar || !app) return;
+  const isOpen = open ?? app.classList.contains('sidebar-open');
+  if (sidebarIsMobile()) {
+    sidebar.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    sidebar.inert = !isOpen;
+  } else {
+    sidebar.setAttribute('aria-hidden', 'false');
+    sidebar.inert = false;
+  }
+}
+
 function openSidebar() {
   $('#app-view')?.classList.add('sidebar-open');
+  syncSidebarA11y(true);
+  setTimeout(() => $('#sidebar-close-btn')?.focus(), 60);
 }
 
 function closeSidebar() {
   $('#app-view')?.classList.remove('sidebar-open');
+  syncSidebarA11y(false);
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -4663,6 +4901,14 @@ function enterDemo() {
 }
 
 function exitDemo() {
+  closeModals();
+  closeCommandPalette();
+  closeSidebar();
+  exitFocusMode();
+  if (state.call.call) {
+    try { state.call.call.hangup('user_hangup', false); } catch {}
+    closeCallUI();
+  }
   state.demo = false;
   state.demoRooms = [];
   state.currentRoomId = null;
@@ -4677,6 +4923,10 @@ function exitDemo() {
    ════════════════════════════════════════════════════════════ */
 async function logout() {
   if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
+  if (state.call.call) {
+    try { state.call.call.hangup('user_hangup', false); } catch {}
+    closeCallUI();
+  }
   if (state.demo) {
     exitDemo();
     return;
@@ -4684,6 +4934,7 @@ async function logout() {
   const ok = await confirmDialog('Выйти из аккаунта?', 'Сессия будет завершена на этом устройстве.', 'Выйти');
   if (!ok) return;
 
+  clearReadReceiptTimers();
   try { await state.client?.logout(true); } catch {}
   try { state.client?.stopClient(); } catch {}
   clearSession();
@@ -4697,7 +4948,17 @@ async function logout() {
   toast('Вы вышли из аккаунта', 'info');
 }
 
+function clearReadReceiptTimers() {
+  Object.values(state.readReceiptTimers || {}).forEach((timer) => clearTimeout(timer));
+  state.readReceiptTimers = {};
+}
+
 function showAuth() {
+  clearReadReceiptTimers();
+  if (state.call.call) {
+    try { state.call.call.hangup('user_hangup', false); } catch {}
+    closeCallUI();
+  }
   document.title = 'mst.matrix — Matrix, beautifully';
   exitFocusMode();
   closeCommandPalette();
@@ -4728,10 +4989,10 @@ function bindEvents() {
   $('#logout-btn').addEventListener('click', logout);
   $('#logout-btn-2').addEventListener('click', logout);
   $('#pinned-label').addEventListener('click', openPinnedModal);
-  $('#pinned-body').addEventListener('click', (e) => {
+  $('#pinned-body').addEventListener('click', async (e) => {
     const remove = e.target.closest('[data-pinned-remove]');
     if (remove) {
-      togglePin({ id: remove.dataset.pinnedRemove });
+      await togglePin({ id: remove.dataset.pinnedRemove });
       openPinnedModal();
       return;
     }
@@ -4747,7 +5008,16 @@ function bindEvents() {
   $('#profile-btn').addEventListener('click', openProfileModal);
 
   $('#new-room-btn').addEventListener('click', openNewRoom);
-  $('#empty-new-room').addEventListener('click', openNewRoom);
+  $('#empty-new-room').addEventListener('click', () => {
+    if (state.roomFilter) {
+      state.roomFilter = '';
+      const search = $('#room-search');
+      if (search) search.value = '';
+      renderRooms();
+    } else {
+      openNewRoom();
+    }
+  });
   $('#empty-new-room-2').addEventListener('click', openNewRoom);
 
   $('#room-search').addEventListener('input', (e) => {
@@ -4761,6 +5031,12 @@ function bindEvents() {
   });
 
   document.addEventListener('keydown', (e) => {
+    const profileTarget = e.target.closest?.('[data-user-id][role="button"], [data-member][role="button"]');
+    if (profileTarget && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      openUserProfile(profileTarget.dataset.userId || profileTarget.dataset.member);
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       openCommandPalette();
@@ -4776,6 +5052,7 @@ function bindEvents() {
         !$('#modal-backdrop')?.classList.contains('hidden') ||
         !$('#command-palette')?.classList.contains('hidden') ||
         !$('#emoji-pop')?.classList.contains('hidden') ||
+        !$('#call-backdrop')?.classList.contains('hidden') ||
         !$('#lightbox')?.classList.contains('hidden');
       closeCommandPalette();
       if (state.voice.recorder?.state === 'recording') finishVoiceRecording(false);
@@ -4795,7 +5072,9 @@ function bindEvents() {
 
   // Sidebar / mobile
   $('#menu-btn').addEventListener('click', openSidebar);
+  $('#sidebar-close-btn').addEventListener('click', closeSidebar);
   $('#sidebar-scrim').addEventListener('click', closeSidebar);
+  window.addEventListener('resize', () => syncSidebarA11y());
 
   // Header
   $('#chat-search-btn').addEventListener('click', () => {
@@ -5085,8 +5364,12 @@ function bindEvents() {
   $('#command-palette').addEventListener('click', (e) => {
     if (e.target.id === 'command-palette') closeCommandPalette();
   });
+  $('#command-palette').addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') trapFocus($('.command-panel'), e);
+  });
   $('#command-input').addEventListener('input', (e) => renderCommands(e.target.value));
   $('#command-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { trapFocus($('.command-panel'), e); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveCommand(1); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveCommand(-1); }
     else if (e.key === 'Enter') { e.preventDefault(); selectCommand(state.commandIndex); }
@@ -5126,7 +5409,8 @@ function bindEvents() {
     if (!join) return;
     const roomId = join.dataset.spaceJoin;
     const existing = state.demo ? state.demoRooms.find((r) => r.id === roomId) : state.client?.getRoom(roomId);
-    if (existing) {
+    const joined = state.demo ? !!existing : existing?.getMyMembership?.() === 'join';
+    if (joined) {
       closeModals();
       selectRoom(roomId);
     } else {
@@ -5183,7 +5467,8 @@ function bindEvents() {
     if (!roomBtn) return;
     const roomId = roomBtn.dataset.searchRoom;
     const existing = state.demo ? state.demoRooms.find((r) => r.id === roomId) : state.client?.getRoom(roomId);
-    if (existing) {
+    const joined = state.demo ? !!existing : existing?.getMyMembership?.() === 'join';
+    if (joined) {
       closeModals();
       selectRoom(roomId);
     } else {
@@ -5209,6 +5494,9 @@ function bindEvents() {
   $('#call-hangup').addEventListener('click', hangupCall);
   $('#call-mic').addEventListener('click', toggleCallMic);
   $('#call-cam').addEventListener('click', toggleCallCam);
+  $('#call-backdrop').addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') trapFocus($('#call-card'), e);
+  });
 
   // E2EE
   $('#load-devices').addEventListener('click', loadMyDevices);
@@ -5459,8 +5747,20 @@ async function init() {
 
   document.addEventListener('error', (e) => {
     const img = e.target;
-    if (img?.tagName === 'IMG' && (img.dataset.mediaMxc || img.dataset.avatarMxc)) {
+    if (img?.tagName !== 'IMG') return;
+    if ((img.dataset.mediaMxc || img.dataset.avatarMxc) && img.dataset.authTried !== '1') {
+      img.dataset.authTried = '1';
       loadAuthenticatedMedia(img);
+      return;
+    }
+    if (img.dataset.avatarFallback) {
+      const fallback = img.dataset.avatarFallback;
+      const parent = img.parentElement;
+      if (parent) {
+        img.remove();
+        parent.textContent = fallback;
+      }
+      return;
     }
   }, true);
 
@@ -5486,6 +5786,10 @@ async function init() {
 
   resizeComposer();
   updateSendButton();
+  updateConnectionBanner();
+  window.addEventListener('online', updateConnectionBanner);
+  window.addEventListener('offline', updateConnectionBanner);
+  syncSidebarA11y();
 
   if (location.hash === '#demo') {
     enterDemo();
@@ -5498,7 +5802,7 @@ async function init() {
   }
 }
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   });
