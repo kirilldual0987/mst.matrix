@@ -1,0 +1,10 @@
+/* Basic layout and overrides */
+body { margin: 20px; font-family: Arial, sans-serif; }
+#messages { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; background:#fafafa; }
+.messageBox div { margin-bottom: 8px; }
+.messageBox .own { background:#e0ffe0; padding:4px; border-radius:4px; }
+.messageBox .other { background:#fff; padding:4px; border-radius:4px; }
+.messageBox .meta { font-size:0.8em; color:#555; }
+.inputArea textarea { width:100%; }
+.inputArea button { margin-top:5px; }
+#typing { height:1.2em; }

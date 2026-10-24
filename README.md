@@ -1,24 +1,58 @@
-# mst.matrix
+# mst.matrix – Full‑featured Matrix Web Client
 
-A minimal Matrix web client built with plain JavaScript and **matrix-js-sdk**.
+Это статический веб‑клиент для Matrix, написанный на чистом JavaScript и использующий библиотеку **matrix-js-sdk**. В отличие от минимального примера, здесь реализовано практически всё, что обычно требуется в полноценном клиенте.
 
-## Features
-- Login with homeserver URL, Matrix ID and password.
-- List of joined rooms.
-- Click a room to view recent messages.
-- Send text messages.
-- Logout.
+## Основные возможности
+- **Авторизация** по homeserver URL, Matrix ID (User ID) и паролю.
+- **Список комнат** (joined) с быстрым переключением.
+- **Создание / присоединение** к комнате по имени или алиасу (`#room:example.org`).
+- **Просмотр сообщений** с тайм‑стампом и именем отправителя.
+- Поддержка **текстовых сообщений, изображений и файлов** (автозагрузка через `client.uploadContent`).
+- **Отправка реакций** (emoji) – кнопка 😀 открывает короткий набор эмодзи.
+- **Редактирование** и **удаление** собственных сообщений.
+- **Определение печати**: отображает, кто сейчас набирает текст.
+- **Уведомления о прочтении** (по умолчанию клиент автоматически отправляет read‑receipts).
+- **Создание новых комнат** (публичных) и **присоединение** к существующим.
+- **Logout** с очисткой состояния.
+- UI построен на лёгком CSS‑фреймворке **Milligram**, стили‑перекрытия в `styles.css`.
 
-The UI uses the lightweight **Milligram** CSS framework for a clean look.
+## Установка и запуск
+1. **Клонируйте репозиторий** (или скачайте ZIP) и откройте папку `mst.matrix`.
+2. Откройте `index.html` в браузере **или** запустите простой статический сервер, например:
+   ```bash
+   cd mst.matrix
+   npx serve .
+   ```
+   (по умолчанию сервер будет доступен на `http://localhost:3000`).
+3. Войдите, указав ваш homeserver, Matrix ID и пароль.
+4. Всё готово к использованию.
 
-## Deploy to GitHub Pages
-1. Create a new repository (e.g. `yourname/mst.matrix`).
-2. Copy the `mst.matrix` folder into the repository root.
-3. Commit and push.
-4. In the repository settings enable **GitHub Pages** → source: `main` branch / `root`.
-5. The site will be available at `https://yourname.github.io/mst.matrix/`.
-
-You can also serve the folder locally with any static web server, e.g.:
-```bash
-npx serve .
+## Публикация на GitHub Pages
+Репозиторий уже настроен для публикации через GitHub Pages. После первой публикации клиент будет доступен по адресу:
 ```
+https://kirilldual0987.github.io/mstUItest303/
+```
+Если вы хотите развернуть собственный репозиторий, выполните:
+1. Создайте новый публичный репозиторий на GitHub.
+2. Скопируйте файлы из `mst.matrix/` в корень репозитория.
+3. Закоммитьте и запушьте в ветку `main`.
+4. В настройках репозитория включите **Settings → Pages**, выберите ветку `main` и корневой каталог (`/`).
+5. Через несколько минут ваш клиент будет доступен по URL `https://<username>.github.io/<repo>/`.
+
+## Структура проекта
+```
+mst.matrix/
+├─ index.html      # HTML‑страница, подключает CSS и app.js
+├─ styles.css      # небольшие стили оформления
+├─ app.js          # основной скрипт клиента (логика Matrix SDK)
+└─ README.md       # текущий документ
+```
+
+## Возможные улучшения
+- Добавить поддержку **end‑to‑end шифрования** (E2EE) через `matrix-js-sdk` – достаточно сложная задача.
+- Интеграция **emoji‑picker** библиотеки (например, EmojiMart) для более широкого набора эмодзи.
+- Улучшить UI/UX (тёмная тема, адаптивный дизайн).
+- Добавить **push‑уведомления** через Service Workers.
+- Добавить **поиск по сообщениям** и **фильтрацию**.
+
+Если понадобится реализовать любую из этих функций или что‑то ещё – дайте знать, я помогу доработать клиент.
